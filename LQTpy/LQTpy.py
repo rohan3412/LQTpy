@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import nibabel as nib
@@ -7,23 +8,17 @@ from nilearn.datasets import load_mni152_template
 from nilearn import plotting
 
 from importlib import resources
+import tempfile
 
 from LQTpy.util import load_nifti, load_path
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.ticker as mtick
 import matplotlib.cm as cm
-
-# Combined Bar Plot with Glass Brain Overlays
-import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-import numpy as np
-from nilearn import plotting
-import tempfile
-import os
 
 def compute_overlap(lesion, roi):
     lesion_data = lesion.get_fdata() > 0
@@ -188,3 +183,4 @@ def LQTpy(lesion,modules={'structural':True,
         plt.close()
 
         print(f"Top 5 ROI visualization with combined glass brain saved as top5_barplot_with_combined_glass_brain.png in {structural_output}")
+
