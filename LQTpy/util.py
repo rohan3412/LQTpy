@@ -1,13 +1,12 @@
 import nibabel as nib
-import os
 from pathlib import Path
 
 def load_nifti(lesion):
-    if isinstance(lesion, str):
-        if not os.path.exists(lesion):
-            raise FileNotFoundError(f"File not found: {lesion}")
-        img = nib.load(lesion)
-        return img
+    if isinstance(lesion, (str, Path)):
+        lesion_path = Path(lesion)
+        if not lesion_path.exists():
+            raise FileNotFoundError(f"File not found: {lesion_path}")
+        return nib.load(str(lesion_path))
 
     elif isinstance(lesion, nib.Nifti1Image):
         return lesion
@@ -20,9 +19,9 @@ def load_path(output_path):
     if isinstance(output_path, Path):
         return output_path
 
-    if isinstance(output_path, (str, os.PathLike)):
+    if isinstance(output_path, (str, Path)):
         return Path(output_path)
 
     raise TypeError(
-        f"output_path must be a str, os.PathLike, or pathlib.Path, not {type(output_path)}"
+        f"output_path must be a str or pathlib.Path, not {type(output_path)}"
     )
