@@ -10,7 +10,7 @@ from nilearn import plotting
 from importlib import resources
 import tempfile
 
-from LQTpy.util import load_nifti, load_path
+from .util import load_nifti, load_path
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -183,4 +183,5 @@ def LQTpy(lesion,modules={'structural':True,
         plt.close()
 
         print(f"Top 5 ROI visualization with combined glass brain saved as top5_barplot_with_combined_glass_brain.png in {structural_output}")
+
 
