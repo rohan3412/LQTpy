@@ -9,9 +9,9 @@ from nilearn import plotting
 
 from importlib import resources
 import tempfile
+from pathlib import Path
 
 from .util import load_nifti, load_path
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
@@ -32,24 +32,23 @@ def compute_overlap(lesion, roi):
 
     return roi_percent, lesion_percent, overlap_voxels
 
-def LQTpy(lesion,modules={'structural':True,
-                          'tract':True,
-                          'disconnectome':True,
-                          'network':True},atlas="Harvard_Oxford_test",output_path="output"):
+def LQTpy(lesion, modules={'structural': True,
+                           'tract': True,
+                           'disconnectome': True,
+                           'network': True}, atlas="Harvard_Oxford_test", output_path="output"):
 
     mni_img = load_mni152_template()
 
-    lesion_img = resample_to_img(load_nifti(lesion),mni_img, interpolation='nearest', force_resample=True, copy_header=True)
+    lesion_img = resample_to_img(load_nifti(lesion), mni_img, interpolation='nearest', force_resample=True, copy_header=True)
     output_path = load_path(output_path)
-    output_path.mkdir(parents=True,exist_ok = True)
-
+    output_path.mkdir(parents=True, exist_ok=True)
 
     if modules['structural']:
         structural_output = output_path / "structural"
-        structural_output.mkdir(exist_ok = True)
+        structural_output.mkdir(exist_ok=True)
         structural_results = []
 
-        atlas_dir = resources.files("LQTpy.resources.Atlas." + atlas)
+        atlas_dir = resources.files('LQTpy').joinpath(Path('resources') / 'Atlas' / atlas)
 
         roi_paths = [path for path in atlas_dir.iterdir() if path.name.endswith(('.nii', '.nii.gz'))]
 
@@ -67,16 +66,15 @@ def LQTpy(lesion,modules={'structural':True,
                 "percent_lesion_overlap": lesion_percent
             })
 
-        df = pd.DataFrame(structural_results, columns=["roi","overlap_voxels","percent_roi_overlap","percent_lesion_overlap"])
+        df = pd.DataFrame(structural_results, columns=["roi", "overlap_voxels", "percent_roi_overlap", "percent_lesion_overlap"])
 
         csv_path = structural_output / "structural_results.csv"
-        df.to_csv(csv_path, index = False)
+        df.to_csv(csv_path, index=False)
 
         top_n = 10
 
         df_sorted = df.sort_values(by="overlap_voxels", ascending=False)
-
-        df_sorted = df_sorted[df_sorted['overlap_voxels']>0]
+        df_sorted = df_sorted[df_sorted['overlap_voxels'] > 0]
 
         white_red_cmap = LinearSegmentedColormap.from_list("white_red", ["white", "red"])
         white_blue_cmap = LinearSegmentedColormap.from_list("white_blue", ["white", "blue"])
@@ -101,7 +99,7 @@ def LQTpy(lesion,modules={'structural':True,
         display.close()
 
         roi_folder = structural_output / "roi_glass_brain"
-        roi_folder.mkdir(exist_ok = True)
+        roi_folder.mkdir(exist_ok=True)
 
         # Plot top N overlapping ROIs
         top_rois = df_sorted[df_sorted["overlap_voxels"] > 0].head(top_n)
@@ -183,5 +181,3 @@ def LQTpy(lesion,modules={'structural':True,
         plt.close()
 
         print(f"Top 5 ROI visualization with combined glass brain saved as top5_barplot_with_combined_glass_brain.png in {structural_output}")
-
-
