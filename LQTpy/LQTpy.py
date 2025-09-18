@@ -7,10 +7,13 @@ from importlib import resources
 from pathlib import Path
 from .structural import compute_structural_analysis
 from .structural_plot import create_structural_plots
+from .disconnectome import compute_disconnectome
 
-def LQTpy(lesion, modules={'structural': True, 'tract': True, 'disconnectome': True, 'network': True}, atlas="Harvard_Oxford_test", output_path="output"):
-    mni_img = load_mni152_template()
-    lesion_img = resample_to_img(nib.load(lesion), mni_img, interpolation='nearest', force_resample=True, copy_header=True)
+def LQTpy(lesion_file='lesion.nii', tck_file='global_tractography_sift.tck', reference_file='mni152.nii.gz', 
+          modules={'structural': True, 'tract': True, 'disconnectome': True, 'network': True}, 
+          atlas="Harvard_Oxford_test", output_path="output"):
+    mni_img = nib.load(reference_file)
+    lesion_img = resample_to_img(nib.load(lesion_file), mni_img, interpolation='nearest', force_resample=True, copy_header=True)
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -19,5 +22,10 @@ def LQTpy(lesion, modules={'structural': True, 'tract': True, 'disconnectome': T
         structural_output.mkdir(exist_ok=True)
         atlas_dir = resources.files('LQTpy').joinpath(Path('resources') / 'Atlas' / atlas)
         roi_paths = [path for path in atlas_dir.iterdir() if path.name.endswith(('.nii', '.nii.gz'))]
-        df = compute_structural_analysis(lesion_img, mni_img, atlas_dir, roi_paths, structural_output)
+        df = compute_structural_analysis(lesion_img, mni_img, atlas_dir, roi_paths, structural_output, lesion_file)
         create_structural_plots(df, lesion_img, mni_img, roi_paths, structural_output)
+
+    if modules['disconnectome']:
+        disconnectome_output = output_path / "disconnectome"
+        disconnectome_output.mkdir(exist_ok=True)
+        compute_disconnectome(lesion_img, disconnectome_output, tck_file, reference_file)
