@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import nibabel as nib
 from nilearn.image import resample_to_img
+from pathlib import Path
 
 def compute_overlap(lesion, roi):
     lesion_data = lesion.get_fdata() > 0
@@ -12,7 +13,7 @@ def compute_overlap(lesion, roi):
     lesion_percent = overlap_voxels / lesion_data.sum()
     return roi_percent, lesion_percent, overlap_voxels
 
-def compute_structural_analysis(lesion_img, mni_img, atlas_dir, roi_paths, structural_output):
+def compute_structural_analysis(lesion_img, mni_img, atlas_dir, roi_paths, structural_output, lesion_file):
     structural_results = []
     for roi_path in roi_paths:
         roi_img = resample_to_img(nib.load(roi_path), mni_img, interpolation='nearest', force_resample=True, copy_header=True)
