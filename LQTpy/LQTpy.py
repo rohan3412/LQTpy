@@ -9,10 +9,12 @@ from .structural import compute_structural_analysis
 from .structural_plot import create_structural_plots
 from .disconnectome import compute_disconnectome
 
-def LQTpy(lesion_file='lesion.nii', tck_file='global_tractography_sift.tck', reference_file='mni152.nii.gz', 
+def LQTpy(lesion_file='lesion.nii', tck_file='global_tractography_sift.tck', reference_path=None, 
           modules={'structural': True, 'tract': True, 'disconnectome': True, 'network': True}, 
           atlas="Harvard_Oxford_test", output_path="output"):
-    mni_img = nib.load(reference_file)
+	if reference_path is None:
+		reference_path = resources.files('LQTpy').joinpath('resources', 'mni152.nii.gz')
+    mni_img = nib.load(reference_path)
     lesion_img = resample_to_img(nib.load(lesion_file), mni_img, interpolation='nearest', force_resample=True, copy_header=True)
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -29,3 +31,4 @@ def LQTpy(lesion_file='lesion.nii', tck_file='global_tractography_sift.tck', ref
         disconnectome_output = output_path / "disconnectome"
         disconnectome_output.mkdir(exist_ok=True)
         compute_disconnectome(lesion_img, disconnectome_output, tck_file, reference_file)
+
