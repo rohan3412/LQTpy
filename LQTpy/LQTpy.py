@@ -12,6 +12,7 @@ from .disconnectome import compute_disconnectome
 def LQTpy(lesion_file='lesion.nii', tck_file='global_tractography_sift.tck', reference_path=None, 
           modules={'structural': True, 'tract': True, 'disconnectome': True, 'network': True}, 
           atlas="Harvard_Oxford_test", output_path="output"):
+    print(f"Running Lesion Analysis for {lesion_file} ...")
     if reference_path is None:
         reference_path = resources.files('LQTpy').joinpath('resources', 'mni152.nii.gz')
     mni_img = nib.load(reference_path)
@@ -31,4 +32,5 @@ def LQTpy(lesion_file='lesion.nii', tck_file='global_tractography_sift.tck', ref
         disconnectome_output = output_path / "disconnectome"
         disconnectome_output.mkdir(exist_ok=True)
         compute_disconnectome(lesion_img, disconnectome_output, tck_file, mni_img)
+
 
