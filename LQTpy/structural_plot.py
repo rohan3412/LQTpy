@@ -8,8 +8,11 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 import matplotlib.cm as cm
 from matplotlib.colors import LinearSegmentedColormap
+import warnings
+warnings.filterwarnings("ignore", message="This figure includes Axes that are not compatible with tight_layout")
 
 def create_structural_plots(df, lesion_img, mni_img, roi_paths, structural_output):
+    print("Creating structural plots")
     top_n = 10
     df_sorted = df.sort_values(by="overlap_voxels", ascending=False)
     df_sorted = df_sorted[df_sorted['overlap_voxels'] > 0]
