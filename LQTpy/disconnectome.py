@@ -4,6 +4,9 @@ from dipy.io.streamline import load_tck
 from dipy.tracking.utils import density_map
 from dipy.tracking.streamline import Streamlines
 from tqdm import tqdm
+import time
+
+from .util import easy_time
 
 def streamline_intersects_lesion(streamline, lesion_mask, affine):
     streamline_vox = np.round(nib.affines.apply_affine(np.linalg.inv(affine), streamline)).astype(int)
@@ -16,8 +19,16 @@ def streamline_intersects_lesion(streamline, lesion_mask, affine):
                 return True
     return False
 
-def compute_disconnectome(lesion_img, disconnectome_output, tck_file, reference_file):
-    tck = load_tck(tck_file, reference=reference_file)
+def compute_disconnectome(lesion_img, disconnectome_output, tck_file, reference_path):
+    print()
+    print("Starting disconnectome analysis")
+    print("Tracts: load",end="")
+
+    load_start_time = time.time()
+    tck = load_tck(tck_file, reference=reference_path)
+    loading_time = time.time() - load_start_time
+
+    print(f"ed ({tck_file}) in {easy_time(loading_time)}")
     streamlines = tck.streamlines
     lesion_data = lesion_img.get_fdata().astype(bool)
     affine = lesion_img.affine
