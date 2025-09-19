@@ -3,6 +3,8 @@ import pandas as pd
 import nibabel as nib
 from nilearn.image import resample_to_img
 from pathlib import Path
+from tqdm import tqdm
+import time
 
 def compute_overlap(lesion, roi):
     lesion_data = lesion.get_fdata() > 0
@@ -15,8 +17,11 @@ def compute_overlap(lesion, roi):
 
 def compute_structural_analysis(lesion_img, mni_img, atlas_dir, roi_paths, structural_output, lesion_file):
     structural_results = []
-    for roi_path in roi_paths:
-        roi_img = resample_to_img(nib.load(roi_path), mni_img, interpolation='nearest', force_resample=True, copy_header=True)
+    print("Starting structural analysis")
+    time.sleep(0.5)
+    for roi_path in tqdm(roi_paths, desc="Processing ROIs"):
+        roi_img = resample_to_img(nib.load(roi_path), mni_img, interpolation='nearest', force_resample=True,
+                                  copy_header=True)
         roi_percent, lesion_percent, overlap_voxels = compute_overlap(lesion_img, roi_img)
         structural_results.append({
             "roi": Path(roi_path.stem).stem,
