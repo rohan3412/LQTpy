@@ -25,3 +25,22 @@ def load_path(output_path):
     raise TypeError(
         f"output_path must be a str or pathlib.Path, not {type(output_path)}"
     )
+
+def easy_time(seconds):
+    seconds = int(seconds)
+    hour, remainder = divmod(seconds, 3600)
+    minute, seconds = divmod(remainder, 60)
+
+    parts = []
+    if hour:
+        if hour==1:
+            parts.append(f"{hour} HR")
+        else:
+            parts.append(f"{hour} HRS")
+    if minute:
+        parts.append(f"{minute} MIN")
+    if seconds:
+        parts.append(f"{seconds} SEC")
+
+    return " ".join(parts)
+
