@@ -15,6 +15,7 @@ dependencies = [
   "pandas",
   "numpy",
   "matplotlib",
+  "tqdm"
 ]
 
 [build-system]
