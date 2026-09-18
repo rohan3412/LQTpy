@@ -1,0 +1,30 @@
+<svg viewBox="0 0 720 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lcutiepie (lqtpy)">
+  <title>Lcutiepie (lqtpy)</title>
+  <g transform="translate(24,20)">
+    <!-- restrained brain outline -->
+    <path d="M60 8
+             C34 8 14 26 12 50
+             C-2 54 -4 78 8 90
+             C4 104 14 118 30 122
+             C34 134 48 142 62 140
+             C74 148 92 148 104 140
+             C120 142 134 132 138 118
+             C152 114 160 100 156 86
+             C166 72 162 52 148 42
+             C146 24 128 8 106 8
+             C96 2 70 2 60 8 Z"
+          fill="none" stroke="#9aa4b2" stroke-width="3" stroke-linejoin="round" opacity="0.55"/>
+    <!-- tract streamline -->
+    <path d="M18 66 C40 48 52 84 74 70 C96 56 104 92 132 78"
+          fill="none" stroke="#6fa8d8" stroke-width="3.5" stroke-linecap="round" opacity="0.9"/>
+    <path d="M26 96 C46 88 58 108 84 100 C104 94 112 112 138 104"
+          fill="none" stroke="#6fa8d8" stroke-width="2.5" stroke-linecap="round" opacity="0.55"/>
+    <!-- lesion -->
+    <circle cx="96" cy="66" r="9" fill="#ff8a75"/>
+    <circle cx="96" cy="66" r="16" fill="none" stroke="#ff8a75" stroke-width="2" opacity="0.45"/>
+  </g>
+  <g transform="translate(200,58)" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="0" y="0" font-size="46" font-weight="650" fill="#e8eaed" letter-spacing="-0.5">Lcutiepie</text>
+    <text x="2" y="30" font-size="16" fill="#9aa4b2" letter-spacing="0.2">lqtpy &#8212; lesion morphometry, atlas overlap &amp; disconnection</text>
+  </g>
+</svg>

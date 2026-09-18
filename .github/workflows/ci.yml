@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core-only:
+    name: core-only (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install lqtpy with no extras
+        run: python -m pip install .
+
+      - name: Install pytest (test runner only, not a core dependency)
+        run: python -m pip install pytest
+
+      - name: Assert import lqtpy works
+        run: python -c "import lqtpy; print('import lqtpy OK, version', lqtpy.__version__)"
+
+      - name: Assert pandas/matplotlib/nilearn are NOT installed
+        # A core-only install must not accidentally pull these in
+        # transitively; if any of these `pip show` calls succeed, the job
+        # must fail -- otherwise it could pass by accident.
+        run: |
+          set -e
+          for pkg in pandas matplotlib nilearn; do
+            if python -m pip show "$pkg" >/dev/null 2>&1; then
+              echo "FAIL: $pkg is installed in a core-only environment"
+              exit 1
+            else
+              echo "OK: $pkg is not installed"
+            fi
+          done
+
+      - name: Run tests that don't need extras
+        # Tests needing pandas/matplotlib/nilearn use pytest.importorskip and
+        # skip cleanly here rather than erroring.
+        run: python -m pytest -q
+
+      - name: Run the README quickstart (core install only)
+        run: python examples/quickstart.py
+
+  full:
+    name: full (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install lqtpy with all extras + dev
+        run: python -m pip install ".[all,dev]"
+
+      - name: Assert import lqtpy still does not import pandas/matplotlib/nilearn
+        # Even with the extras installed, `import lqtpy` alone must stay lazy.
+        run: |
+          python -c "
+          import sys, lqtpy
+          leaked = sorted(m for m in ('pandas', 'matplotlib', 'nilearn') if m in sys.modules)
+          assert not leaked, f'import lqtpy pulled in: {leaked}'
+          print('OK: import lqtpy stayed lazy with extras installed')
+          "
+
+      - name: Run full test suite
+        run: python -m pytest -q
+
+  wheel-install:
+    name: wheel-install (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel --outdir dist/
+
+      - name: List wheel contents (atlas files must be present)
+        run: |
+          set -e
+          WHEEL=$(ls dist/*.whl)
+          echo "Wheel: $WHEEL"
+          python -m zipfile -l "$WHEEL" | tee wheel-contents.txt
+          for f in \
+            "lqtpy/data/atlases/aal.nii.gz" \
+            "lqtpy/data/atlases/FreeSurferDKT.nii.gz" \
+            "lqtpy/data/atlases/FreeSurferDKT.txt" \
+            "lqtpy/data/atlases/Schaefer2018_100Parcels_7Networks_order_FSLMNI152_1mm_resliced.nii.gz" \
+            "lqtpy/data/atlases/Schaefer2018_100Parcels_7Networks_order_FSLMNI152_1mm_resliced.csv" \
+          ; do
+            if ! grep -qF "$f" wheel-contents.txt; then
+              echo "FAIL: $f missing from wheel"
+              exit 1
+            fi
+          done
+          echo "OK: all 5 bundled atlas files present in the wheel"
+
+      - name: Install the built wheel into a fresh environment
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/python -m pip install dist/*.whl
+
+      - name: Run atlas-loading script from OUTSIDE the checkout
+        # Running from outside the checkout is the point: from inside, the
+        # source tree would shadow the installed wheel, and an atlas-less
+        # wheel would pass by accident.
+        run: |
+          mkdir -p /tmp/outside-checkout
+          cat > /tmp/outside-checkout/atlas_smoke.py <<'EOF'
+          import os
+          import lqtpy
+
+          assert "site-packages" in lqtpy.__file__ or "dist-packages" in lqtpy.__file__, (
+              f"import lqtpy resolved to {lqtpy.__file__!r}, expected the "
+              "installed wheel, not a shadowing source tree"
+          )
+
+          atlases = lqtpy.list_atlases()
+          assert atlases, "no atlases registered"
+          for key in atlases:
+              atlas = lqtpy.load_atlas(key)
+              assert atlas.img is not None
+              assert len(atlas.labels) > 0
+              print(f"{key}: {atlas.name}, {len(atlas.labels)} regions")
+          print("OK: all atlases loaded from the installed wheel")
+          EOF
+          cd /tmp/outside-checkout
+          /tmp/wheel-venv/bin/python atlas_smoke.py

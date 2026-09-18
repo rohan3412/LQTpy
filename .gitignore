@@ -1,0 +1,20 @@
+# Belt-and-braces against a patient scan ever landing in git: the source tree
+# this package was assembled from contained patient lesion NIfTIs. Blanket-
+# ignore all NIfTI files, then narrowly un-ignore the bundled reference
+# atlases that are meant to ship with the package.
+*.nii*
+!lqtpy/data/atlases/**
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+.claude/

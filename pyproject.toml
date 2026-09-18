@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lqtpy"
+version = "0.4.0"
+description = "Lcutiepie: fast lesion morphometry and atlas-overlap analysis, with self-contained HTML reports."
+readme = "README.md"
+requires-python = ">=3.9"
+keywords = [
+    "neuroimaging", "lesion", "morphometry", "disconnection", "tractography",
+    "atlas", "NIfTI", "clinical-research",
+]
+authors = [
+    { name = "Lcutiepie contributors" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+# No `[project.urls]` table yet: the repository has not been pushed anywhere,
+# so there is no homepage/issues URL to publish and a placeholder would be a
+# broken link. Add one when it exists.
+
+# Core stays numpy/scipy/nibabel only -- everything that needs pandas,
+# matplotlib, or nilearn is opt-in via extras below. NOTE: as of this release
+# several modules still import those extras unconditionally at module scope
+# (see the packaging report), so `import lqtpy` does not yet honor this split
+# in practice -- fixing that is later-phase work, not part of this packaging
+# pass.
+dependencies = [
+    "numpy",
+    "scipy",
+    "nibabel",
+]
+
+[project.optional-dependencies]
+tables = ["pandas"]
+plots = ["matplotlib", "nilearn"]
+ggseg = ["pandas", "matplotlib"]
+discon = []  # tract_disconnection() is implemented and needs no extra packages
+             # at runtime (numpy/nibabel only); it does need a locally-built
+             # index -- see tools/build_discon_index.py and lqtpy/datasets.py.
+report = ["pandas", "matplotlib"]
+all = ["pandas", "matplotlib", "nilearn"]
+dev = ["pandas", "matplotlib", "nilearn", "pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["lqtpy"]
+
+# THE SINGLE MOST IMPORTANT LINE IN THIS FILE.
+# Hatchling builds its file list from VCS (git ls-files) by default. .gitignore
+# blanket-excludes `*.nii*` to keep patient scans out of git, and the bundled
+# atlas volumes under lqtpy/data/atlases/ are *.nii.gz -- so without this
+# explicit `artifacts` entry, hatchling's VCS-based file list silently drops
+# them and the built wheel ships with zero atlases. lqtpy would install fine
+# and then raise FileNotFoundError the moment anyone loads an atlas. Do not
+# remove this line, and if the atlases directory moves, update the glob.
+artifacts = ["lqtpy/data/**"]

@@ -1,0 +1,132 @@
+# Lobe column: anatomical-lobe grouping for the 96 DKT31+CMA regions.
+# Cortical (left_*/right_*, DK-style names, LabelID >= 1000): lobe follows
+# the standard Desikan-Killiany / DKT cortical-lobe grouping used across the
+# FreeSurfer literature (e.g. Klein A, Tourville J. "101 labeled brain
+# images and a consistent human cortical labeling protocol." Frontiers in
+# Neuroscience 2012;6:171 -- the DKT protocol this atlas's cortical regions
+# come from -- and FreeSurfer's own aparc-to-lobe convention), with two
+# deliberate choices kept consistent with this file's AAL sibling
+# (data/aal_labels.csv) rather than re-litigated per atlas:
+#   - caudalanteriorcingulate/rostralanteriorcingulate/posteriorcingulate/
+#     isthmuscingulate, parahippocampal and entorhinal -> Limbic (not
+#     Temporal/Frontal), matching Cingulum_*/ParaHippocampal in the AAL
+#     table; entorhinal is included because it is anatomically part of the
+#     same parahippocampal/limbic circuit even though some lobe tables file
+#     it under Temporal.
+#   - paracentral -> Frontal, matching Paracentral_Lobule in the AAL table
+#     (alternative: Parietal -- see that file's header for the rationale).
+#   - fusiform -> Temporal here (the standard DK/DKT convention, unlike this
+#     file's AAL sibling, which files Fusiform under Occipital -- see
+#     aal_labels.csv's header for that choice). This is the same
+#     occipitotemporal ambiguity noted there; the two atlases are allowed to
+#     disagree since each follows its own atlas's conventional grouping.
+#   - insula -> its own Insula lobe, not Frontal/Temporal.
+# Non-cortical CMA entries (subcortical/ventricle/cerebellar/brainstem,
+# LabelID < 1000 plus the 630-632 vermal-lobule rows) don't have a
+# published "lobe" in the cortical sense; each is filed under whichever of
+# Subcortical/Ventricle/Cerebellum/Brainstem/Limbic best describes it so
+# that none is left blank (per Mindboggle-101/FreeSurfer's own aseg
+# structure naming -- see data/atlases/SOURCE.md for the atlas's
+# provenance): basal ganglia/thalamus/accumbens/ventral DC/basal forebrain
+# -> Subcortical; hippocampus/amygdala -> Limbic (matching the cortical and
+# AAL choice above); ventricles/CSF/choroid -> Ventricle; cerebellar
+# cortex/white matter/vermal lobules -> Cerebellum; brain stem -> Brainstem;
+# the single unclassifiable "vessel" entry -> Subcortical (nearest
+# catch-all; it is not a lobe in any sense).
+LabelID,RegionName,Lobe
+4,left_lateral_ventricle,Ventricle
+5,left_inf_lat_vent,Ventricle
+6,left_cerebellum_exterior,Cerebellum
+7,left_cerebellum_white_matter,Cerebellum
+10,left_thalamus,Subcortical
+11,left_caudate,Subcortical
+12,left_putamen,Subcortical
+13,left_pallidum,Subcortical
+14,3rd_ventricle,Ventricle
+15,4th_ventricle,Ventricle
+16,brain_stem,Brainstem
+17,left_hippocampus,Limbic
+18,left_amygdala,Limbic
+24,csf,Ventricle
+26,left_accumbens_area,Subcortical
+28,left_ventraldc,Subcortical
+30,left_vessel,Subcortical
+43,right_lateral_ventricle,Ventricle
+44,right_inf_lat_vent,Ventricle
+45,right_cerebellum_exterior,Cerebellum
+46,right_cerebellum_white_matter,Cerebellum
+49,right_thalamus,Subcortical
+50,right_caudate,Subcortical
+51,right_putamen,Subcortical
+52,right_pallidum,Subcortical
+53,right_hippocampus,Limbic
+54,right_amygdala,Limbic
+58,right_accumbens_area,Subcortical
+60,right_ventraldc,Subcortical
+91,left_basal_forebrain,Subcortical
+92,right_basal_forebrain,Subcortical
+630,cerebellar_vermal_lobules_i_v,Cerebellum
+631,cerebellar_vermal_lobules_vi_vii,Cerebellum
+632,cerebellar_vermal_lobules_viii_x,Cerebellum
+1002,left_caudalanteriorcingulate,Limbic
+1003,left_caudalmiddlefrontal,Frontal
+1005,left_cuneus,Occipital
+1006,left_entorhinal,Limbic
+1007,left_fusiform,Temporal
+1008,left_inferiorparietal,Parietal
+1009,left_inferiortemporal,Temporal
+1010,left_isthmuscingulate,Limbic
+1011,left_lateraloccipital,Occipital
+1012,left_lateralorbitofrontal,Frontal
+1013,left_lingual,Occipital
+1014,left_medialorbitofrontal,Frontal
+1015,left_middletemporal,Temporal
+1016,left_parahippocampal,Limbic
+1017,left_paracentral,Frontal
+1018,left_parsopercularis,Frontal
+1019,left_parsorbitalis,Frontal
+1020,left_parstriangularis,Frontal
+1021,left_pericalcarine,Occipital
+1022,left_postcentral,Parietal
+1023,left_posteriorcingulate,Limbic
+1024,left_precentral,Frontal
+1025,left_precuneus,Parietal
+1026,left_rostralanteriorcingulate,Limbic
+1027,left_rostralmiddlefrontal,Frontal
+1028,left_superiorfrontal,Frontal
+1029,left_superiorparietal,Parietal
+1030,left_superiortemporal,Temporal
+1031,left_supramarginal,Parietal
+1034,left_transversetemporal,Temporal
+1035,left_insula,Insula
+2002,right_caudalanteriorcingulate,Limbic
+2003,right_caudalmiddlefrontal,Frontal
+2005,right_cuneus,Occipital
+2006,right_entorhinal,Limbic
+2007,right_fusiform,Temporal
+2008,right_inferiorparietal,Parietal
+2009,right_inferiortemporal,Temporal
+2010,right_isthmuscingulate,Limbic
+2011,right_lateraloccipital,Occipital
+2012,right_lateralorbitofrontal,Frontal
+2013,right_lingual,Occipital
+2014,right_medialorbitofrontal,Frontal
+2015,right_middletemporal,Temporal
+2016,right_parahippocampal,Limbic
+2017,right_paracentral,Frontal
+2018,right_parsopercularis,Frontal
+2019,right_parsorbitalis,Frontal
+2020,right_parstriangularis,Frontal
+2021,right_pericalcarine,Occipital
+2022,right_postcentral,Parietal
+2023,right_posteriorcingulate,Limbic
+2024,right_precentral,Frontal
+2025,right_precuneus,Parietal
+2026,right_rostralanteriorcingulate,Limbic
+2027,right_rostralmiddlefrontal,Frontal
+2028,right_superiorfrontal,Frontal
+2029,right_superiorparietal,Parietal
+2030,right_superiortemporal,Temporal
+2031,right_supramarginal,Parietal
+2034,right_transversetemporal,Temporal
+2035,right_insula,Insula
