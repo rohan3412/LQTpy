@@ -7,7 +7,7 @@ tractography atlas. At roughly 18 MB it is too large to bundle in the
 wheel, so it is built locally and loaded from a per-user data home rather
 than from package data. (Licensing does not prevent distributing one: the
 source atlas is CC BY-SA 4.0, so a hosted index would simply have to carry
-that licence and its attribution -- see ``DATA-LICENSES.md``.)
+that licence and its attribution -- see ``lqtpy/data/atlases/SOURCE.md``.)
 
 Thread safety mirrors ``lqtpy/atlases.py``: the index is loaded once,
 lazily, behind a lock, cached as read-only arrays, and rebuildable via

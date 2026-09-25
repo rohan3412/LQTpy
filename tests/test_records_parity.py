@@ -157,6 +157,11 @@ def test_analyze_group_region_agg_sort_and_columns(write_nifti, sphere_lesion_im
     records = entry["df"]
     if records:
         assert list(records[0].keys()) == [
-            "RegionName", "Group", "NSubjects", "MeanPercentDamage", "MaxPercentDamage"]
-        keys = [(-r["NSubjects"], -r["MeanPercentDamage"]) for r in records]
+            "RegionName", "Group", "NSubjects", "NSubjectsTotal", "CohortMeanPercentDamage",
+            "MeanPercentDamageAffected", "MaxPercentDamage"]
+        keys = [(-r["NSubjects"], -r["CohortMeanPercentDamage"]) for r in records]
         assert keys == sorted(keys)
+        for r in records:
+            # Cohort mean counts unaffected subjects as 0; affected mean doesn't.
+            assert r["CohortMeanPercentDamage"] == pytest.approx(
+                r["MeanPercentDamageAffected"] * r["NSubjects"] / r["NSubjectsTotal"], abs=0.01)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lqtpy"
-version = "0.4.0"
+dynamic = ["version"]
 description = "Lcutiepie: fast lesion morphometry and atlas-overlap analysis, with self-contained HTML reports."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -31,12 +31,10 @@ classifiers = [
 # so there is no homepage/issues URL to publish and a placeholder would be a
 # broken link. Add one when it exists.
 
-# Core stays numpy/scipy/nibabel only -- everything that needs pandas,
-# matplotlib, or nilearn is opt-in via extras below. NOTE: as of this release
-# several modules still import those extras unconditionally at module scope
-# (see the packaging report), so `import lqtpy` does not yet honor this split
-# in practice -- fixing that is later-phase work, not part of this packaging
-# pass.
+# Core stays numpy/scipy/nibabel only: morphometry, atlas overlap, QC,
+# descriptions and the built-in shape extra need nothing else, and
+# `import lqtpy` imports none of pandas/matplotlib/nilearn (enforced by
+# tests/test_import_hygiene.py). Figures and HTML reports are opt-in extras.
 dependencies = [
     "numpy",
     "scipy",
@@ -45,17 +43,20 @@ dependencies = [
 
 [project.optional-dependencies]
 tables = ["pandas"]
-plots = ["matplotlib", "nilearn"]
+plots = ["matplotlib", "nilearn", "pandas", "ggseg"]
 ggseg = ["pandas", "matplotlib"]
 discon = []  # tract_disconnection() is implemented and needs no extra packages
              # at runtime (numpy/nibabel only); it does need a locally-built
              # index -- see tools/build_discon_index.py and lqtpy/datasets.py.
-report = ["pandas", "matplotlib"]
-all = ["pandas", "matplotlib", "nilearn"]
-dev = ["pandas", "matplotlib", "nilearn", "pytest"]
+report = ["pandas", "matplotlib", "nilearn", "ggseg"]
+all = ["pandas", "matplotlib", "nilearn", "ggseg"]
+dev = ["pandas", "matplotlib", "nilearn", "ggseg", "pytest", "dipy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.hatch.version]
+path = "lqtpy/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["lqtpy"]

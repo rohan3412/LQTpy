@@ -1,49 +1,65 @@
-"""High-level orchestration: single-lesion and group analysis."""
+"""High-level orchestration: single-lesion and group analysis.
+
+``analyze_single`` and ``analyze_group`` run the whole pipeline on a
+:class:`~lqtpy.prepared.PreparedLesion` -- loaded and binarized once --
+and return plain records plus a run ``manifest`` that says exactly which
+modules ran, which were skipped or unavailable, and why. Reports render
+their scope block from that manifest.
+
+Pipeline per lesion
+-------------------
+core    morphometry, QC flags, per-atlas overlap + coverage (+ network /
+        lobe / homolog rollups), white-matter tract proxy, streamline
+        disconnection (when an index is installed), plain-language
+        description.
+extras  registered extra measures (e.g. ``shape``; plugins such as fractal
+        dimension), requested with ``extras="all"`` or a list of names.
+
+``plots=False`` (the default) never imports matplotlib/nilearn/pandas.
+"""
 from __future__ import annotations
 
 import csv
+import datetime
 import json
 import os
 import time
-import datetime
 
 import numpy as np
 import nibabel as nib
 
-from .atlases import DEFAULT_ATLASES, load_atlas
-from .errors import InvalidLesionError, MissingDependencyError
-from .io import load_lesion, resample_mask_to
-from .morphometry import compute_morphometry
-from .overlap import (region_overlap, region_overlap_from_mask,
-                      network_rollup, homolog_symmetry, lobe_rollup,
-                      atlas_has_lobes,
-                      _COLUMNS as _DAMAGE_COLUMNS,
-                      _NETWORK_COLUMNS, _HOMOLOG_COLUMNS, _LOBE_COLUMNS)
-from .tracts import _COLUMNS as _TRACT_COLUMNS
+from . import registry
 from . import tracts as _tracts
+from .atlases import DEFAULT_ATLASES, load_atlas
+from .errors import DataUnavailableError, InvalidLesionError, MissingDependencyError
+from .manifest import FAILED, RAN, SKIPPED, UNAVAILABLE, Manifest
+from .morphometry import compute_morphometry
+from .overlap import (_COLUMNS as _DAMAGE_COLUMNS, _HOMOLOG_COLUMNS,
+                      _LOBE_COLUMNS, _NETWORK_COLUMNS, atlas_has_lobes, coverage,
+                      homolog_symmetry, lobe_rollup, network_rollup, region_overlap_from_mask)
+from .prepared import prepare
+from .tracts import _COLUMNS as _TRACT_COLUMNS
 
-# `plotting` (matplotlib) and `report` are imported lazily inside the
-# functions that use them, so `import lqtpy` doesn't pull matplotlib in.
-# Region/tract tables are **records** (list[dict]) everywhere in this module
-# -- pandas is never imported for the numeric path. The only place this
-# module still touches pandas is building a throwaway DataFrame right before
-# handing data to `plotting.py`'s bar-chart helpers or `report.py`'s HTML
-# renderer, both of which predate this refactor and already require
-# matplotlib/pandas whenever a report is generated (unchanged, out of scope
-# here) -- see `_frame`, `_for_report_single`, `_for_report_group` below.
-
-_GROUP_DAMAGE_COLUMNS = ["RegionName", "Group", "NSubjects",
-                         "MeanPercentDamage", "MaxPercentDamage"]
-_GROUP_NETWORK_COLUMNS = ["Network", "NSubjects",
-                          "MeanPercentDamage", "MaxPercentDamage"]
-_GROUP_TRACT_COLUMNS = ["Tract", "NSubjects",
-                        "MeanPercentOverlap", "MaxPercentOverlap"]
+_GROUP_DAMAGE_COLUMNS = ["RegionName", "Group", "NSubjects", "NSubjectsTotal",
+                         "CohortMeanPercentDamage", "MeanPercentDamageAffected",
+                         "MaxPercentDamage"]
+_GROUP_NETWORK_COLUMNS = ["Network", "NSubjects", "NSubjectsTotal",
+                          "CohortMeanPercentDamage", "MeanPercentDamageAffected",
+                          "MaxPercentDamage"]
+_GROUP_LOBE_COLUMNS = ["Lobe", "NSubjects", "NSubjectsTotal",
+                       "CohortMeanPercentDamage", "MeanPercentDamageAffected",
+                       "MaxPercentDamage"]
+_GROUP_TRACT_COLUMNS = ["Tract", "NSubjects", "NSubjectsTotal",
+                        "CohortMeanPercentOverlap", "MeanPercentOverlapAffected",
+                        "MaxPercentOverlap"]
+_DISCON_COLUMNS = ["tract", "name", "n_streamlines", "n_disconnected", "percent_disconnected"]
 
 
+# --------------------------------------------------------------------------- #
+# Small helpers
+# --------------------------------------------------------------------------- #
 def _stem(path) -> str:
-    """Derive an output-file stem from a lesion source. Non-path sources
-    (a nibabel image, or an (array, affine) tuple -- see as_lesion_image)
-    have no filename to draw from, so they fall back to a fixed name."""
+    """Output-file stem for a lesion source; non-path sources get "lesion"."""
     if not isinstance(path, (str, os.PathLike)):
         return "lesion"
     b = os.path.basename(os.fspath(path))
@@ -53,14 +69,23 @@ def _stem(path) -> str:
     return os.path.splitext(b)[0]
 
 
+def _atlas_keys(atlases) -> "list[str]":
+    """None -> the defaults; a bare string -> a one-item list (``"aal"`` must
+    not be iterated per character); duplicates dropped, order kept."""
+    if not atlases:
+        return list(DEFAULT_ATLASES)
+    if isinstance(atlases, str):
+        atlases = [atlases]
+    return list(dict.fromkeys(a.lower() for a in atlases))
+
+
 def _fmt_elapsed(sec: float) -> str:
-    return f"{sec:.1f}s" if sec < 60 else f"{sec/60:.1f} min"
+    return f"{sec:.1f}s" if sec < 60 else f"{sec / 60:.1f} min"
 
 
 def _write_csv(path, records, columns):
-    """Write a list of dict records to CSV via the stdlib ``csv`` module."""
     with open(path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=columns)
+        writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(records)
 
@@ -72,32 +97,25 @@ def _pandas():
         raise MissingDependencyError(
             "tables",
             "This requires pandas. Install the 'tables' extra for a "
-            "frame='pandas' conversion, or the 'report'/'ggseg'/'plots' "
-            "extras to generate reports/plots: pip install 'lqtpy[tables]'"
-        ) from exc
+            "frame='pandas' conversion, or the 'report'/'plots' extras to "
+            "generate reports/plots: pip install 'lqtpy[tables]'") from exc
     return pd
 
 
 def _frame(records, columns):
-    """Build a pandas DataFrame from records, purely for feeding into the
-    (unmodified) plotting.py/report.py helpers, which still expect
-    DataFrame-style column access. Returns None for None input."""
+    """A DataFrame for the plotting helpers (and ``frame="pandas"``)."""
     if records is None:
         return None
     return _pandas().DataFrame(records, columns=columns)
 
 
 def _ggseg_dict(atlas, records, value_col="PercentDamage") -> dict:
-    """Map an atlas damage table to {ggseg_region: value} for dk_flat_png."""
     if not atlas.ggseg or not records:
         return {}
-    return {
-        atlas.ggseg_map[r["RegionName"]]: float(r[value_col])
-        for r in records if r["RegionName"] in atlas.ggseg_map
-    }
+    return {atlas.ggseg_map[r["RegionName"]]: float(r[value_col])
+            for r in records if r["RegionName"] in atlas.ggseg_map}
 
 
-# AAL subcortical/cerebellar regions -> ggseg aseg region keys.
 _ASEG_BASE = {"Hippocampus": "Hippocampus", "Amygdala": "Amygdala",
               "Caudate": "Caudate", "Putamen": "Putamen",
               "Pallidum": "Pallidum", "Thalamus": "Thalamus"}
@@ -122,304 +140,270 @@ def _aal_to_aseg(records, value_col="PercentDamage") -> dict:
 
 
 def _flat_maps(atlas, records, value_col="PercentDamage"):
-    """Return a list of (caption, data_uri) ggseg-style flat maps for an atlas."""
+    """``[(caption, {"light": uri, "dark": uri})]`` ggseg-style flat maps for
+    an atlas, one render per report theme."""
     from . import plotting
     from .ggseg_flat import dk_flat_png, schaefer_flat_png
     maps = []
-    if atlas.key == "dk":
-        maps.append(("", dk_flat_png(_ggseg_dict(atlas, records, value_col))))
-    elif atlas.key == "schaefer":
-        data = ({r["RegionName"]: float(r[value_col]) for r in records}
-                if records else {})
-        maps.append(("", schaefer_flat_png(data)))
-    elif atlas.key == "aal":
-        maps.append(("Subcortical / cerebellar overlap (aseg surrogate geometry)",
-                     plotting.ggseg_aseg_png(_aal_to_aseg(records, value_col))))
-    return [(cap, uri) for cap, uri in maps if uri]
+    for theme in ("light", "dark"):
+        if atlas.key == "dk":
+            uri = dk_flat_png(_ggseg_dict(atlas, records, value_col), theme=theme)
+            cap = "Cortical damage (DKT), percent of each region damaged"
+        elif atlas.key == "schaefer":
+            data = {r["RegionName"]: float(r[value_col]) for r in records} if records else {}
+            uri = schaefer_flat_png(data, theme=theme)
+            cap = "Cortical damage (Schaefer-100), percent of each parcel damaged"
+        elif atlas.key == "aal":
+            uri = plotting.ggseg_aseg_png(_aal_to_aseg(records, value_col), theme=theme)
+            cap = "Subcortical and cerebellar damage (AAL, drawn on aseg geometry)"
+        else:
+            return []
+        if not uri:
+            return []
+        if not maps:
+            maps.append((cap, {}))
+        maps[0][1][theme] = uri
+    return maps
 
 
-def _add_extras(entry, key, atlas, records, plots=False):
-    """Attach per-atlas extras: Yeo-7 network rollup (Schaefer), L/R homolog
-    symmetry table (AAL), lobe rollup (any atlas with a lobe mapping --
-    currently aal/dk). The rollup/symmetry tables are plain records, always
-    computed; the network bar chart is matplotlib-backed and only built
-    when ``plots`` is true."""
-    if key == "schaefer":
-        net = network_rollup(records, atlas)
-        entry["network_df"] = net
+def _require_plot_stack() -> None:
+    """Fail early, with the extra to install, when plots are requested
+    without matplotlib/nilearn/pandas."""
+    import importlib
+    missing = []
+    for mod in ("matplotlib", "nilearn", "pandas"):
+        try:
+            importlib.import_module(mod)
+        except ImportError:
+            missing.append(mod)
+    if missing:
+        raise MissingDependencyError(
+            "plots", f"plots=True needs {', '.join(missing)}. Install the 'plots' extra: "
+                     "pip install 'lqtpy[plots]'")
+
+
+def _extra_names(extras) -> "list[str]":
+    """Resolve the ``extras`` argument to measure names."""
+    if not extras or extras == "none":
+        return []
+    available = [m.name for m in registry.list_measures("extra", available_only=False)]
+    if extras == "all":
+        return available
+    if isinstance(extras, str):
+        extras = [e.strip() for e in extras.split(",") if e.strip()]
+    unknown = [e for e in extras if e not in available]
+    if unknown:
+        raise ValueError(f"unknown extra measure(s) {unknown}; available: {available}")
+    return list(extras)
+
+
+# --------------------------------------------------------------------------- #
+# One lesion, no file output
+# --------------------------------------------------------------------------- #
+def _analyse(p, atlases, *, kind, tracts, plots, qc, describe, profile, extras,
+             disconnection, expected_side, threshold) -> dict:
+    from . import datasets as _datasets
+    from . import qc as _qc
+
+    man = Manifest(kind, settings={"threshold": threshold, "atlases": atlases,
+                                   "profile": profile if describe else None,
+                                   "extras": extras or "none"})
+    t0 = time.perf_counter()
+    morph = compute_morphometry(p)
+    man.add("morphometry", "Core morphometry", RAN)
+
+    flags = []
+    if qc:
+        flags = _qc.check(p, expected_side=expected_side)
+        man.add("qc", "Mask quality checks", RAN)
+    else:
+        man.add("qc", "Mask quality checks", SKIPPED, reason="turned off (qc=False)")
+
+    glass_uri = slices_uri = None
+    if plots:
+        from . import plotting
+        glass_uri = plotting.glass_brain_png(p.img)
+        slices_uri = plotting.slices_png(p.img, cut_coords=morph["center_of_mass_mm"])
+
+    atlas_results = []
+    for key in atlases:
+        atlas = load_atlas(key)
+        gm = p.on_grid(atlas.img)
+        df = region_overlap_from_mask(gm.mask, atlas)
+        entry = {"key": key, "name": atlas.name, "tier": atlas.tier, "df": df,
+                 "coverage": coverage(p, atlas)}
+        if key in ("schaefer", "arterial"):
+            # Yeo-7 networks / major vascular territories (the atlas's Group).
+            entry["network_df"] = network_rollup(df, atlas, lesion_total=gm.n_voxels)
+        if key == "aal":
+            entry["homolog_df"] = homolog_symmetry(df)
+        if atlas_has_lobes(atlas):
+            entry["lobe_df"] = lobe_rollup(df, atlas, lesion_total=gm.n_voxels)
         if plots:
-            from . import plotting
-            entry["network_bar_uri"] = plotting.network_bar_png(_frame(net, _NETWORK_COLUMNS))
-    elif key == "aal":
-        entry["homolog_df"] = homolog_symmetry(records)
-    if atlas_has_lobes(atlas):
-        entry["lobe_df"] = lobe_rollup(records, atlas)
+            entry["flat_uris"] = _flat_maps(atlas, df)
+        atlas_results.append(entry)
+        man.add(f"atlas:{key}", atlas.name, RAN, tier=atlas.tier)
+
+    tract_res = None
+    if not tracts:
+        man.add("tract_proxy", "White-matter tract overlap (proxy)", SKIPPED,
+                reason="turned off (tracts=False)")
+    elif not _tracts.tracts_available():
+        man.add("tract_proxy", "White-matter tract overlap (proxy)", UNAVAILABLE,
+                reason="tract proxy index missing from the installation")
+    else:
+        tdf = _tracts.tract_overlap(p)
+        tract_res = {"df": tdf}
+        man.add("tract_proxy", "White-matter tract overlap (proxy)", RAN)
+
+    discon = None
+    label = "Streamline disconnection"
+    if disconnection is False:
+        man.add("disconnection", label, SKIPPED, reason="turned off (disconnection=False)")
+    elif not _datasets.discon_index_available():
+        if disconnection is True:
+            _datasets.get_discon_index_path()  # raises DataUnavailableError with instructions
+        man.add("disconnection", label, UNAVAILABLE,
+                reason="no disconnection index installed (tools/build_discon_index.py)")
+    else:
+        from .api import tract_disconnection
+        try:
+            discon = tract_disconnection(p)
+            man.add("disconnection", label, RAN)
+        except DataUnavailableError as exc:
+            man.add("disconnection", label, FAILED, reason=str(exc).splitlines()[0])
+
+    extra_names = _extra_names(extras)
+    measures = registry.run_measures(p, extra_names, manifest=man) if extra_names else {}
+    for spec in registry.list_measures("extra", available_only=False):
+        if spec.name not in extra_names:
+            man.add(f"measure:{spec.name}", spec.label, SKIPPED, tier="extra",
+                    reason="not requested")
+
+    description = None
+    if describe:
+        from .describe import describe as _describe
+        d = _describe(p, profile=profile, qc_flags=flags,
+                      shape="shape" in measures)
+        description = {"text": d.text, "sections": d.sections, "marked": d.marked,
+                       "profile": d.profile, "facts": d.facts}
+        man.add("description", "Plain-language description", RAN, profile=profile)
+    else:
+        man.add("description", "Plain-language description", SKIPPED,
+                reason="turned off (describe=False)")
+
+    return {
+        "name": p.name,
+        "source_path": p.source if isinstance(p.source, (str, os.PathLike)) else None,
+        "was_binary": p.was_binary,
+        "morphometry": morph,
+        "qc": [f.to_dict() for f in flags],
+        "description": description,
+        "measures": {k: {"values": v["values"], "descriptors": [d.text for d in v["descriptors"]]}
+                     for k, v in measures.items()},
+        "glass_uri": glass_uri,
+        "slices_uri": slices_uri,
+        "atlases": atlas_results,
+        "tracts": tract_res,
+        "disconnection": discon,
+        "manifest": man.to_dict(),
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "compute_seconds": round(time.perf_counter() - t0, 3),
+    }
 
 
-def _group_network(schaefer_frames, atlas):
-    """Aggregate per-subject Schaefer overlap into per-network group stats.
-
-    Records with keys Network, NSubjects, MeanPercentDamage,
-    MaxPercentDamage, sorted by MeanPercentDamage descending.
-    """
-    nets = [network_rollup(f, atlas) for f in schaefer_frames if f]
-    nets = [n for n in nets if n]
-    if not nets:
-        return []
-
-    grouped: dict[str, dict] = {}
-    for n in nets:
-        for r in n:
-            g = grouped.setdefault(r["Network"], {"sum": 0.0, "max": float("-inf"), "n": 0})
-            g["sum"] += r["PercentDamage"]
-            g["max"] = max(g["max"], r["PercentDamage"])
-            g["n"] += 1
-
-    rows = []
-    for net in sorted(grouped):  # mirrors pandas groupby's default key-sorted order
-        g = grouped[net]
-        rows.append({
-            "Network": net,
-            "NSubjects": g["n"],
-            "MeanPercentDamage": round(g["sum"] / g["n"], 2),
-            "MaxPercentDamage": round(g["max"], 2),
-        })
-    rows.sort(key=lambda r: r["MeanPercentDamage"], reverse=True)
-    return rows
-
-
-def _group_tracts(tract_frames):
-    """Aggregate per-subject tract overlap into per-tract group stats.
-
-    Records with keys Tract, NSubjects, MeanPercentOverlap,
-    MaxPercentOverlap, sorted by (NSubjects, MeanPercentOverlap) descending.
-    """
-    frames = [f for f in tract_frames if f]
-    if not frames:
-        return []
-
-    grouped: dict[str, dict] = {}
-    for f in frames:
-        for r in f:
-            g = grouped.setdefault(r["Tract"], {"sum": 0.0, "max": float("-inf"), "n": 0})
-            g["sum"] += r["PercentOverlap"]
-            g["max"] = max(g["max"], r["PercentOverlap"])
-            g["n"] += 1
-
-    rows = []
-    for tract in sorted(grouped):
-        g = grouped[tract]
-        rows.append({
-            "Tract": tract,
-            "NSubjects": g["n"],
-            "MeanPercentOverlap": round(g["sum"] / g["n"], 2),
-            "MaxPercentOverlap": round(g["max"], 2),
-        })
-    rows.sort(key=lambda r: (-r["NSubjects"], -r["MeanPercentOverlap"]))
-    return rows
-
-
-def _aggregate_group_damage(frames):
-    """Aggregate per-subject atlas-overlap records into per-region group
-    stats. Records with keys RegionName, Group, NSubjects,
-    MeanPercentDamage, MaxPercentDamage, sorted by (NSubjects,
-    MeanPercentDamage) descending. ``Group`` is the first-seen value for
-    that region across subjects (mirrors pandas' ``agg(Group=("Group",
-    "first"))``)."""
-    frames = [f for f in frames if f]
-    if not frames:
-        return []
-
-    grouped: dict[str, dict] = {}
-    for f in frames:
-        for r in f:
-            name = r["RegionName"]
-            g = grouped.get(name)
-            if g is None:
-                g = grouped[name] = {"Group": r["Group"], "sum": 0.0,
-                                     "max": float("-inf"), "n": 0}
-            g["sum"] += r["PercentDamage"]
-            g["max"] = max(g["max"], r["PercentDamage"])
-            g["n"] += 1
-
-    rows = []
-    for name in sorted(grouped):
-        g = grouped[name]
-        rows.append({
-            "RegionName": name,
-            "Group": g["Group"],
-            "NSubjects": g["n"],
-            "MeanPercentDamage": round(g["sum"] / g["n"], 2),
-            "MaxPercentDamage": round(g["max"], 2),
-        })
-    rows.sort(key=lambda r: (-r["NSubjects"], -r["MeanPercentDamage"]))
-    return rows
-
-
-# --------------------------------------------------------------------------- #
-# Report-time (DataFrame) view -- report.py/plotting.py predate this refactor
-# and still consume DataFrame-style tables; both are already only reachable
-# once matplotlib (and, for the dk/schaefer flat maps, pandas via
-# ggseg_flat.py) are installed, so building a DataFrame here doesn't add a
-# new dependency to the write=True path. Neither function mutates its input.
-# --------------------------------------------------------------------------- #
-def _for_report_single(result):
-    rr = dict(result)
-    rr["atlases"] = []
+def _write_single(result, out_dir, name, *, plots, report_style=None, back_link=None,
+                  pdf=False):
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, f"{name}_morphometry.json"), "w", encoding="utf-8") as fh:
+        json.dump(result["morphometry"], fh, indent=2)
+    summary = {"name": name, "qc": result["qc"], "manifest": result["manifest"],
+               "measures": result["measures"],
+               "description": (result["description"] or {}).get("text"),
+               "coverage": {a["key"]: a["coverage"] for a in result["atlases"]}}
+    with open(os.path.join(out_dir, f"{name}_summary.json"), "w", encoding="utf-8") as fh:
+        json.dump(summary, fh, indent=2, default=str)
     for a in result["atlases"]:
-        e = dict(a)
-        e["df"] = _frame(e.get("df"), _DAMAGE_COLUMNS)
-        if "network_df" in e:
-            e["network_df"] = _frame(e.get("network_df"), _NETWORK_COLUMNS)
-        if "homolog_df" in e:
-            e["homolog_df"] = _frame(e.get("homolog_df"), _HOMOLOG_COLUMNS)
-        if "lobe_df" in e:
-            e["lobe_df"] = _frame(e.get("lobe_df"), _LOBE_COLUMNS)
-        rr["atlases"].append(e)
-    if result.get("tracts") is not None:
-        t = dict(result["tracts"])
-        t["df"] = _frame(t.get("df"), _TRACT_COLUMNS)
-        rr["tracts"] = t
-    return rr
+        _write_csv(os.path.join(out_dir, f"{name}_{a['key']}_damage.csv"), a["df"], _DAMAGE_COLUMNS)
+        if a.get("lobe_df"):
+            _write_csv(os.path.join(out_dir, f"{name}_{a['key']}_lobes.csv"), a["lobe_df"],
+                       _LOBE_COLUMNS)
+    if result["tracts"] is not None:
+        _write_csv(os.path.join(out_dir, f"{name}_tracts.csv"), result["tracts"]["df"],
+                   _TRACT_COLUMNS)
+    if result["disconnection"] is not None:
+        _write_csv(os.path.join(out_dir, f"{name}_disconnection.csv"), result["disconnection"],
+                   _DISCON_COLUMNS)
+    if result["description"]:
+        with open(os.path.join(out_dir, f"{name}_description.txt"), "w", encoding="utf-8") as fh:
+            fh.write(result["description"]["text"] + "\n")
+    if plots:
+        from .report import render_single
+        path = os.path.join(out_dir, f"{name}_report.html")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(render_single(result, report_style, back_link=back_link))
+        result["report_path"] = path
+        if pdf:
+            from .report import to_pdf
+            result["pdf_path"] = to_pdf(path)
 
 
-def _for_report_group(result):
-    rr = dict(result)
-    rr["atlases"] = []
-    for a in result["atlases"]:
-        e = dict(a)
-        e["df"] = _frame(e.get("df"), _GROUP_DAMAGE_COLUMNS)
-        if "network_df" in e:
-            e["network_df"] = _frame(e.get("network_df"), _GROUP_NETWORK_COLUMNS)
-        rr["atlases"].append(e)
-    if result.get("tracts") is not None:
-        t = dict(result["tracts"])
-        t["df"] = _frame(t.get("df"), _GROUP_TRACT_COLUMNS)
-        rr["tracts"] = t
-    return rr
-
-
-# --------------------------------------------------------------------------- #
-# frame="pandas" opt-in conversion of a returned result -- the only place a
-# caller of analyze_single/analyze_group ever gets pandas objects back.
-# --------------------------------------------------------------------------- #
 def _apply_frame_single(result):
     for a in result["atlases"]:
         a["df"] = _frame(a.get("df"), _DAMAGE_COLUMNS)
-        if "network_df" in a:
-            a["network_df"] = _frame(a.get("network_df"), _NETWORK_COLUMNS)
-        if "homolog_df" in a:
-            a["homolog_df"] = _frame(a.get("homolog_df"), _HOMOLOG_COLUMNS)
-        if "lobe_df" in a:
-            a["lobe_df"] = _frame(a.get("lobe_df"), _LOBE_COLUMNS)
+        for k, cols in (("network_df", _NETWORK_COLUMNS), ("homolog_df", _HOMOLOG_COLUMNS),
+                        ("lobe_df", _LOBE_COLUMNS)):
+            if k in a:
+                a[k] = _frame(a.get(k), cols)
     if result.get("tracts") is not None:
         result["tracts"]["df"] = _frame(result["tracts"].get("df"), _TRACT_COLUMNS)
-
-
-def _apply_frame_group(result):
-    for a in result["atlases"]:
-        a["df"] = _frame(a.get("df"), _GROUP_DAMAGE_COLUMNS)
-        if "network_df" in a:
-            a["network_df"] = _frame(a.get("network_df"), _GROUP_NETWORK_COLUMNS)
-    if result.get("tracts") is not None:
-        result["tracts"]["df"] = _frame(result["tracts"].get("df"), _GROUP_TRACT_COLUMNS)
 
 
 # --------------------------------------------------------------------------- #
 # Single lesion
 # --------------------------------------------------------------------------- #
 def analyze_single(lesion_path, atlases=None, out_dir=None, threshold=0.5,
-                   tracts=True, write=True, plots=False, verbose=False, frame=None):
-    """Analyse one lesion; return a result dict and (optionally) write
-    per-atlas CSVs (``write=True``) and a self-contained HTML report with
-    images (``write=True`` and ``plots=True``).
+                   tracts=True, write=True, plots=False, verbose=False, frame=None, *,
+                   qc=True, describe=True, profile="stroke", extras=None,
+                   disconnection="auto", expected_side=None, report_style=None, pdf=False):
+    """Analyse one lesion; return a result dict and (optionally) write CSV/JSON
+    tables (``write=True``) and a self-contained HTML report
+    (``write=True`` and ``plots=True``).
 
-    ``lesion_path`` accepts anything :func:`lqtpy.io.as_lesion_image` does: a
-    path (str/os.PathLike), a nibabel image, or an ``(array, affine)`` tuple.
+    ``lesion_path`` accepts anything :func:`lqtpy.prepare` does. Core
+    modules always run unless turned off (``qc``, ``describe``, ``tracts``,
+    ``disconnection`` -- the latter runs automatically when an index is
+    installed). ``extras`` selects extra measures: ``None`` (core only),
+    ``"all"``, or a list of names from :func:`lqtpy.registry.list_measures`.
+    ``profile`` picks the description style (stroke / small_vessel / tumour
+    / research). ``result["manifest"]`` records what ran and what didn't.
 
-    ``plots=False`` (the default) never imports matplotlib/nilearn/pandas:
-    every atlas/tract table is still computed and (with ``write=True``)
-    written to CSV, but no glass-brain/slice/bar/flat-map image and no HTML
-    report are produced. Pass ``plots=True`` for the original behaviour.
+    ``pdf=True`` (with ``write`` and ``plots``) also saves the report as a
+    PDF next to it, via :func:`lqtpy.report.to_pdf`.
 
-    Atlas/tract tables in the returned result are **records** (``list[dict]``)
-    by default. Pass ``frame="pandas"`` to get ``pandas.DataFrame`` objects
-    instead (requires the ``tables`` extra).
+    Tables are records by default; ``frame="pandas"`` returns DataFrames.
     """
     t0 = time.time()
-    atlases = atlases or DEFAULT_ATLASES
-    name = _stem(lesion_path)
-    if verbose:
-        print(f"[lqtpy] analysing {name} ...")
-
-    img, was_binary = load_lesion(lesion_path, threshold)
-    morph = compute_morphometry(img)
-    cut = morph["center_of_mass_mm"]
-
-    glass_uri = slices_uri = None
+    atlases = _atlas_keys(atlases)
     if plots:
-        from . import plotting
-        glass_uri = plotting.glass_brain_png(img, title=f"{name}")
-        slices_uri = plotting.slices_png(img, cut_coords=cut, title="Lesion overlay")
-
-    atlas_results, csv_tables = [], {}
-    for key in atlases:
-        atlas = load_atlas(key)
-        df = region_overlap(img, atlas)
-        csv_tables[key] = df
-        entry = {"key": key, "name": atlas.name, "df": df}
-        if plots:
-            from . import plotting
-            entry["bar_uri"] = plotting.damage_bar_png(
-                _frame(df, _DAMAGE_COLUMNS), title=f"{atlas.name}: top damaged")
-            entry["flat_uris"] = _flat_maps(atlas, df)
-        _add_extras(entry, key, atlas, df, plots=plots)
-        atlas_results.append(entry)
-        if verbose:
-            print(f"[lqtpy]   {key}: {len(df)} regions overlap")
-
-    tract_df = _tracts.tract_overlap(img) if (tracts and _tracts.tracts_available()) else None
-    tract_uri = None
-    if plots and tract_df is not None:
-        from . import plotting
-        tract_uri = plotting.tract_bar_png(_frame(tract_df, _TRACT_COLUMNS))
-
-    elapsed = time.time() - t0
-    result = {
-        "name": name,
-        "source_path": lesion_path,
-        "was_binary": was_binary,
-        "morphometry": morph,
-        "glass_uri": glass_uri,
-        "slices_uri": slices_uri,
-        "atlases": atlas_results,
-        "tracts": None if tract_df is None else {"df": tract_df, "bar_uri": tract_uri},
-        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "elapsed": _fmt_elapsed(elapsed),
-    }
-
+        _require_plot_stack()
+    p = prepare(lesion_path, threshold)
+    if verbose:
+        print(f"[lqtpy] analysing {p.name} ...")
+    result = _analyse(p, atlases, kind="single", tracts=tracts, plots=plots, qc=qc,
+                      describe=describe, profile=profile, extras=extras,
+                      disconnection=disconnection, expected_side=expected_side,
+                      threshold=threshold)
+    result["elapsed"] = _fmt_elapsed(time.time() - t0)
     if write:
-        out_dir = out_dir or os.path.join("lqtpy_output", name)
-        os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, f"{name}_morphometry.json"), "w") as fh:
-            json.dump(morph, fh, indent=2)
-        for key, records in csv_tables.items():
-            _write_csv(os.path.join(out_dir, f"{name}_{key}_damage.csv"), records, _DAMAGE_COLUMNS)
-        if tract_df is not None:
-            _write_csv(os.path.join(out_dir, f"{name}_tracts.csv"), tract_df, _TRACT_COLUMNS)
-        if plots:
-            from .report import render_single
-            report_path = os.path.join(out_dir, f"{name}_report.html")
-            with open(report_path, "w", encoding="utf-8") as fh:
-                fh.write(render_single(_for_report_single(result)))
-            result["report_path"] = report_path
+        out_dir = out_dir or os.path.join("lqtpy_output", p.name)
+        _write_single(result, out_dir, p.name, plots=plots, report_style=report_style,
+                      pdf=pdf)
         if verbose:
             suffix = f" -> {result['report_path']}" if "report_path" in result else ""
             print(f"[lqtpy] done in {result['elapsed']}{suffix}")
-
     if frame == "pandas":
         _apply_frame_single(result)
-
     return result
 
 
@@ -427,160 +411,243 @@ def analyze_single(lesion_path, atlases=None, out_dir=None, threshold=0.5,
 # Group
 # --------------------------------------------------------------------------- #
 def _normalise_inputs(inputs):
-    """Accept a directory, a list of paths, or a list of (name, lesion).
-
-    Each list item is either a ``(name, lesion)`` pair -- where ``lesion``
-    is anything :func:`lqtpy.io.as_lesion_image` accepts -- or a bare lesion
-    source (path/nibabel image/(array, affine) tuple), auto-named via
-    ``_stem``. A 2-tuple is only treated as ``(name, lesion)`` when its first
-    element is a string, so a bare ``(array, affine)`` tuple passed directly
-    as a list item is treated as one lesion source, not a (name, lesion) pair.
-    """
-    if isinstance(inputs, str) and os.path.isdir(inputs):
-        files = sorted(
-            os.path.join(inputs, f) for f in os.listdir(inputs)
-            if f.endswith((".nii", ".nii.gz"))
-        )
-        return [(_stem(f), f) for f in files]
-    out = []
+    """Accept a directory, a single lesion file, a list of paths, or a list of
+    (name, lesion). A 2-tuple is only treated as ``(name, lesion)`` when its
+    first element is a string, so a bare ``(array, affine)`` tuple passed as
+    a list item is one lesion source. Duplicate names get a numeric suffix."""
+    if isinstance(inputs, (str, os.PathLike)):
+        path = os.fspath(inputs)
+        if os.path.isdir(path):
+            files = sorted(os.path.join(path, f) for f in os.listdir(path)
+                           if f.endswith((".nii", ".nii.gz")))
+            inputs = files
+        else:
+            # A single lesion file: a one-subject group. Iterating the string
+            # would treat each character as a path.
+            inputs = [path]
+    out, seen = [], {}
     for item in inputs:
         if isinstance(item, (tuple, list)) and len(item) == 2 and isinstance(item[0], str):
-            out.append((item[0], item[1]))
+            name, src = item[0], item[1]
         else:
-            out.append((_stem(item), item))
+            name, src = _stem(item), item
+        k = seen.get(name, 0)
+        seen[name] = k + 1
+        out.append((f"{name}_{k + 1}" if k else name, src))
     return out
 
 
+def _aggregate(frames, key, value, n_total, extra_first=None):
+    """Per-key group stats over subjects: NSubjects (affected), NSubjectsTotal,
+    cohort mean (unaffected subjects count as 0), mean over affected
+    subjects, and max."""
+    grouped: "dict[str, dict]" = {}
+    for f in frames:
+        for r in f or []:
+            g = grouped.get(r[key])
+            if g is None:
+                g = grouped[r[key]] = {"sum": 0.0, "max": float("-inf"), "n": 0}
+                if extra_first:
+                    g[extra_first] = r.get(extra_first)
+            g["sum"] += r[value]
+            g["max"] = max(g["max"], r[value])
+            g["n"] += 1
+    rows = []
+    for k in sorted(grouped):
+        g = grouped[k]
+        row = {key: k}
+        if extra_first:
+            row[extra_first] = g[extra_first]
+        suffix = "Overlap" if "Overlap" in value else "Damage"
+        row.update({
+            "NSubjects": g["n"],
+            "NSubjectsTotal": n_total,
+            f"CohortMeanPercent{suffix}": round(g["sum"] / n_total, 2) if n_total else 0.0,
+            f"MeanPercent{suffix}Affected": round(g["sum"] / g["n"], 2),
+            f"MaxPercent{suffix}": round(g["max"], 2),
+        })
+        rows.append(row)
+    suffix = "Overlap" if "Overlap" in value else "Damage"
+    rows.sort(key=lambda r: (-r["NSubjects"], -r[f"CohortMeanPercent{suffix}"]))
+    return rows
+
+
+def _worst(flags):
+    order = {"error": 0, "warn": 1, "info": 2}
+    return min((f["severity"] for f in flags), key=lambda s: order[s], default=None)
+
+
 def analyze_group(inputs, atlases=None, out_dir=None, threshold=0.5,
-                  tracts=True, write=True, plots=False, verbose=False, frame=None):
+                  tracts=True, write=True, plots=False, verbose=False, frame=None, *,
+                  qc=True, describe=True, profile="stroke", extras=None,
+                  disconnection="auto", subject_reports=True, report_style=None, pdf=False):
     """Analyse a group of lesions; return a result dict and (optionally) write
-    group CSVs (``write=True``) and a group HTML report with images
-    (``write=True`` and ``plots=True``).
+    group CSVs, a group HTML report (``plots=True``) and -- with
+    ``subject_reports=True`` -- one full report per subject, linked from the
+    group report.
 
-    Each item in ``inputs`` accepts anything :func:`lqtpy.io.as_lesion_image`
-    does (see :func:`_normalise_inputs`).
-
-    ``plots=False`` (the default) never imports matplotlib/nilearn/pandas.
-
-    Atlas/tract tables in the returned result are **records** (``list[dict]``)
-    by default. Pass ``frame="pandas"`` to get ``pandas.DataFrame`` objects
-    instead (requires the ``tables`` extra).
+    ``inputs``: a directory, a single lesion file, or a list of lesion
+    sources or ``(name, source)`` pairs. Group tables report, per region,
+    how many subjects are affected, the **cohort** mean (unaffected
+    subjects count as 0), the mean over affected subjects, and the max.
     """
     t0 = time.time()
-    atlases = atlases or DEFAULT_ATLASES
+    atlases = _atlas_keys(atlases)
+    if plots:
+        _require_plot_stack()
     pairs = _normalise_inputs(inputs)
     if len(pairs) < 1:
         raise InvalidLesionError("No lesion files found for group analysis.")
+    n = len(pairs)
     if verbose:
-        print(f"[lqtpy] group analysis: {len(pairs)} subjects")
+        print(f"[lqtpy] group analysis: {n} subjects")
 
-    ref_key = atlases[0]
-    ref_atlas = load_atlas(ref_key)
+    ref_atlas = load_atlas(atlases[0])
     ref_img = ref_atlas.img
     freq = np.zeros(ref_img.shape[:3], dtype=np.int32)
+    out_dir = out_dir or os.path.join("lqtpy_output", "group")
+    per_report = bool(write and plots and subject_reports)
 
     subjects = []
-    per_atlas_frames = {k: [] for k in atlases}
+    per_atlas = {k: [] for k in atlases}
+    per_lobe = {k: [] for k in atlases}
+    per_net = {k: [] for k in atlases}
     tract_frames = []
-    do_tracts = tracts and _tracts.tracts_available()
-
-    for name, path in pairs:
-        img, _ = load_lesion(path, threshold)
-        morph = compute_morphometry(img)
-
-        # Resample to the reference (first atlas) grid once; reuse for both the
-        # frequency map and that atlas's region overlap.
-        ref_mask = resample_mask_to(img, ref_img)
-        freq += ref_mask.astype(np.int32)
-
-        top_region = "-"
-        for key in atlases:
-            atlas = load_atlas(key)
-            df = (region_overlap_from_mask(ref_mask, atlas) if key == ref_key
-                  else region_overlap(img, atlas))
-            per_atlas_frames[key].append(df)
-            if key == ref_key and df:
-                top_region = df[0]["RegionName"]
-        if do_tracts:
-            tract_frames.append(_tracts.tract_overlap(img))
-        subjects.append({"name": name, "morphometry": morph, "top_region": top_region})
+    qc_counts: "dict[str, int]" = {}
+    subject_manifest = None
+    for i, (name, src) in enumerate(pairs, start=1):
+        p = prepare(src, threshold, name=name)
+        ts = time.time()
+        res = _analyse(p, atlases, kind="group-member", tracts=tracts, plots=per_report,
+                       qc=qc, describe=describe, profile=profile, extras=extras,
+                       disconnection=disconnection, expected_side=None, threshold=threshold)
+        res["elapsed"] = _fmt_elapsed(time.time() - ts)
+        subject_manifest = res["manifest"]
+        freq += p.on_grid(ref_img).mask
+        for a in res["atlases"]:
+            per_atlas[a["key"]].append(a["df"])
+            if a.get("lobe_df"):
+                per_lobe[a["key"]].append(a["lobe_df"])
+            if a.get("network_df") is not None:
+                per_net[a["key"]].append(a["network_df"])
+        if res["tracts"] is not None:
+            tract_frames.append(res["tracts"]["df"])
+        for f in res["qc"]:
+            if f["severity"] != "info":
+                qc_counts[f["id"]] = qc_counts.get(f["id"], 0) + 1
+        ref_df = res["atlases"][0]["df"]
+        summary_para = ""
+        if res["description"]:
+            summary_para = dict(res["description"]["sections"]).get("Summary", "")
+        facts = (res["description"] or {}).get("facts") or {}
+        terrs = facts.get("territories") or []
+        main_terr = (f"{terrs[0]['hemisphere']} {terrs[0]['territory']}".strip()
+                     if terrs else None)
+        entry = {"name": name, "morphometry": res["morphometry"],
+                 "top_region": ref_df[0]["RegionName"] if ref_df else "-",
+                 "territory": main_terr,
+                 "qc": res["qc"], "qc_worst": _worst(res["qc"]),
+                 "summary": summary_para}
+        if write:
+            sub_dir = os.path.join(out_dir, "subjects", name)
+            _write_single(res, sub_dir, name, plots=per_report, report_style=report_style,
+                          back_link=os.path.join("..", "..", "group_report.html"))
+            if "report_path" in res:
+                entry["report_path"] = os.path.relpath(res["report_path"], out_dir)
+        subjects.append(entry)
         if verbose:
-            print(f"[lqtpy]   {name}: {morph['volume_cc']} cc")
+            print(f"[lqtpy]   [{i}/{n}] {name}: {res['morphometry']['volume_cc']} cc")
 
     freq_img = nib.Nifti1Image(freq, ref_img.affine)
     overlap_uri = None
     if plots:
         from . import plotting
-        overlap_uri = plotting.group_overlap_png(freq_img, len(pairs))
+        overlap_uri = plotting.group_overlap_png(freq_img, n)
 
-    # Aggregate each atlas across subjects.
-    atlas_results, csv_tables = [], {}
+    atlas_results = []
     for key in atlases:
-        agg = _aggregate_group_damage(per_atlas_frames[key])
-        csv_tables[key] = agg
         atlas = load_atlas(key)
-        entry = {"key": key, "name": atlas.name, "df": agg}
+        agg = _aggregate(per_atlas[key], "RegionName", "PercentDamage", n, extra_first="Group")
+        entry = {"key": key, "name": atlas.name, "tier": atlas.tier, "df": agg}
+        if per_lobe[key]:
+            entry["lobe_df"] = _aggregate(per_lobe[key], "Lobe", "PercentDamage", n)
+        if per_net[key]:
+            entry["network_df"] = _aggregate(per_net[key], "Network", "PercentDamage", n)
         if plots:
-            from . import plotting
-            entry["bar_uri"] = plotting.group_damage_bar_png(
-                _frame(agg, _GROUP_DAMAGE_COLUMNS), title=f"{atlas.name}: group")
-            entry["flat_uris"] = _flat_maps(atlas, agg, "MeanPercentDamage")
-        if key == "schaefer":
-            net_agg = _group_network(per_atlas_frames[key], atlas)
-            entry["network_df"] = net_agg
-            if plots:
-                from . import plotting
-                entry["network_bar_uri"] = plotting.group_network_bar_png(
-                    _frame(net_agg, _GROUP_NETWORK_COLUMNS))
+            entry["flat_uris"] = _flat_maps(atlas, agg, "CohortMeanPercentDamage")
         atlas_results.append(entry)
 
-    # Group white-matter tract aggregation.
-    tract_agg = _group_tracts(tract_frames) if do_tracts else None
-    tract_uri = None
-    if plots and tract_agg is not None:
-        from . import plotting
-        tract_uri = plotting.group_tract_bar_png(_frame(tract_agg, _GROUP_TRACT_COLUMNS))
+    tract_agg = _aggregate(tract_frames, "Tract", "PercentOverlap", n) if tract_frames else None
+
+    man = Manifest("group", settings={"threshold": threshold, "atlases": atlases,
+                                      "profile": profile if describe else None,
+                                      "extras": extras or "none", "n_subjects": n})
+    for m in (subject_manifest or {}).get("modules", []):
+        man.add(m["id"], m["label"], m["status"], tier=m["tier"], reason=m.get("reason"))
+    man.add("subject_reports", "One report per subject",
+            RAN if per_report else SKIPPED,
+            reason=None if per_report else ("needs write=True and plots=True" if not (write and plots)
+                                            else "turned off (subject_reports=False)"))
 
     vols = sorted(s["morphometry"]["volume_cc"] for s in subjects)
     lis = [s["morphometry"]["laterality_index"] for s in subjects]
-    n_bilateral = sum(1 for s in subjects if s["morphometry"].get("bilateral"))
-    elapsed = time.time() - t0
     result = {
-        "n_subjects": len(pairs),
+        "n_subjects": n,
         "subjects": subjects,
         "median_volume_cc": round(float(np.median(vols)), 2),
         "median_laterality_index": round(float(np.median(lis)), 3),
-        "n_bilateral": n_bilateral,
+        "n_bilateral": sum(1 for s in subjects if s["morphometry"].get("bilateral")),
         "max_overlap": int(freq.max()),
+        "qc_counts": qc_counts,
+        "n_subjects_with_warnings": sum(1 for s in subjects if s["qc_worst"] in ("warn", "error")),
         "overlap_uri": overlap_uri,
         "atlases": atlas_results,
-        "tracts": None if tract_agg is None else {"df": tract_agg, "bar_uri": tract_uri},
+        "tracts": None if tract_agg is None else {"df": tract_agg},
+        "manifest": man.to_dict(),
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "elapsed": _fmt_elapsed(elapsed),
+        "elapsed": _fmt_elapsed(time.time() - t0),
     }
 
     if write:
-        out_dir = out_dir or os.path.join("lqtpy_output", "group")
         os.makedirs(out_dir, exist_ok=True)
         nib.save(freq_img, os.path.join(out_dir, "lesion_overlap_map.nii.gz"))
-        for key, records in csv_tables.items():
-            _write_csv(os.path.join(out_dir, f"group_{key}_damage.csv"), records, _GROUP_DAMAGE_COLUMNS)
-        if tract_agg is not None:
+        for a in atlas_results:
+            _write_csv(os.path.join(out_dir, f"group_{a['key']}_damage.csv"), a["df"],
+                       _GROUP_DAMAGE_COLUMNS)
+            if a.get("lobe_df"):
+                _write_csv(os.path.join(out_dir, f"group_{a['key']}_lobes.csv"), a["lobe_df"],
+                           _GROUP_LOBE_COLUMNS)
+            if a.get("network_df"):
+                _write_csv(os.path.join(out_dir, f"group_{a['key']}_networks.csv"),
+                           a["network_df"], _GROUP_NETWORK_COLUMNS)
+        if tract_agg:
             _write_csv(os.path.join(out_dir, "group_tracts.csv"), tract_agg, _GROUP_TRACT_COLUMNS)
-        subj_rows = [{"Subject": s["name"], **s["morphometry"]} for s in subjects]
-        subj_columns = ["Subject"] + list(subjects[0]["morphometry"].keys())
-        _write_csv(os.path.join(out_dir, "group_subject_summary.csv"), subj_rows, subj_columns)
+        morph_keys = list(subjects[0]["morphometry"].keys())
+        rows = [{"Subject": s["name"], "QC": s["qc_worst"] or "ok",
+                 "QCFlags": ";".join(f["id"] for f in s["qc"] if f["severity"] != "info"),
+                 **s["morphometry"]} for s in subjects]
+        _write_csv(os.path.join(out_dir, "group_subject_summary.csv"), rows,
+                   ["Subject", "QC", "QCFlags"] + morph_keys)
         if plots:
             from .report import render_group
-            report_path = os.path.join(out_dir, "group_report.html")
-            with open(report_path, "w", encoding="utf-8") as fh:
-                fh.write(render_group(_for_report_group(result)))
-            result["report_path"] = report_path
+            path = os.path.join(out_dir, "group_report.html")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(render_group(result, report_style))
+            result["report_path"] = path
+            if pdf:
+                from .report import to_pdf
+                result["pdf_path"] = to_pdf(path)
         if verbose:
             suffix = f" -> {result['report_path']}" if "report_path" in result else ""
             print(f"[lqtpy] group done in {result['elapsed']}{suffix}")
 
     if frame == "pandas":
-        _apply_frame_group(result)
-
+        for a in result["atlases"]:
+            a["df"] = _frame(a["df"], _GROUP_DAMAGE_COLUMNS)
+            if "lobe_df" in a:
+                a["lobe_df"] = _frame(a["lobe_df"], _GROUP_LOBE_COLUMNS)
+            if "network_df" in a:
+                a["network_df"] = _frame(a["network_df"], _GROUP_NETWORK_COLUMNS)
+        if result["tracts"] is not None:
+            result["tracts"]["df"] = _frame(result["tracts"]["df"], _GROUP_TRACT_COLUMNS)
     return result

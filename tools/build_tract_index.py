@@ -33,7 +33,7 @@ print("loaded", data.dtype, round(data.nbytes / 1e9, 2), "GB")
 
 save = {"shape": np.array(img.shape[:3], dtype=np.int32),
         "affine": img.affine.astype(np.float64),
-        "names": np.array(names, dtype=object)}
+        "names": np.array(names)}
 kept = []
 for i, name in enumerate(names):
     idx = np.flatnonzero((data[..., i] > 0).ravel()).astype(np.int32)

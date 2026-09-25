@@ -67,7 +67,10 @@ import numpy as np
 #: On-disk/format version for the .npz produced by build_index/save_index.
 #: Bump this whenever the array layout or its semantics change, and teach
 #: load_index to either handle old versions or raise a clear error.
-FORMAT_VERSION = 1
+#: v2: tract codes stored as a fixed-width unicode array, so the file loads
+#: with ``allow_pickle=False`` (v1 used an object array, which needs pickle
+#: and would let a crafted .npz run code on load).
+FORMAT_VERSION = 2
 
 #: The validated frame for the HCP-842 population tractography atlas (see
 #: the module docstring's trap warning above). The trk files' internal
@@ -227,7 +230,7 @@ def build_index(tract_streamlines, shape, affine):
         "format_version": FORMAT_VERSION,
         "shape": np.asarray(shape, dtype=np.int32),
         "affine": affine,
-        "tract_codes": np.asarray(tract_codes, dtype=object),
+        "tract_codes": np.asarray([str(c) for c in tract_codes]),
         "tract_ref_counts": ref_counts.astype(np.int32),
         "streamline_tract": streamline_tract,
         "n_streamlines": n_streamlines,
@@ -262,6 +265,8 @@ def gather_streamline_ids(lesion_voxel_keys: np.ndarray, index: dict) -> np.ndar
         keys = lesion_voxel_keys
     else:
         voxel_keys = index["voxel_keys"]
+        if voxel_keys.shape[0] == 0:
+            return np.empty(0, dtype=indices.dtype)
         pos = np.searchsorted(voxel_keys, lesion_voxel_keys)
         pos = np.clip(pos, 0, voxel_keys.shape[0] - 1)
         found = voxel_keys[pos] == lesion_voxel_keys
@@ -301,21 +306,41 @@ def save_index(path: str, index: dict, *, compress: bool = True) -> None:
 def load_index(path: str) -> dict:
     """Load and validate an index built by :func:`save_index`.
 
+    Loads with ``allow_pickle=False``: an index is plain numeric/unicode
+    arrays, so nothing in a well-formed file needs unpickling, and refusing
+    pickle means a crafted file can't execute code. Raises
+    :class:`~lqtpy.errors.IndexFormatError` for an older format or a file
+    that isn't an index.
+
     Returned arrays are NOT made read-only here -- callers that cache the
     result (see ``lqtpy/datasets.py``) are responsible for that, consistent
     with how ``lqtpy/atlases.py`` freezes its own cached arrays.
     """
-    npz = np.load(path, allow_pickle=True)
-    version = int(npz["format_version"])
-    if version != FORMAT_VERSION:
-        raise ValueError(
-            f"Disconnection index at '{path}' has format_version={version}, "
-            f"this lqtpy expects {FORMAT_VERSION}. Rebuild it with "
-            "tools/build_discon_index.py."
-        )
-    out = {k: npz[k] for k in npz.files}
+    from .errors import IndexFormatError
+
+    try:
+        with np.load(path, allow_pickle=False) as npz:
+            if "format_version" not in npz.files:
+                raise IndexFormatError(
+                    f"'{path}' is not a lqtpy disconnection index (no format_version).")
+            version = int(npz["format_version"])
+            if version != FORMAT_VERSION:
+                raise IndexFormatError(
+                    f"Disconnection index at '{path}' has format_version={version}, "
+                    f"this lqtpy expects {FORMAT_VERSION}. Rebuild it with "
+                    "tools/build_discon_index.py."
+                )
+            out = {k: npz[k] for k in npz.files}
+    except IndexFormatError:
+        raise
+    except FileNotFoundError:
+        raise
+    except (ValueError, OSError, KeyError) as exc:
+        raise IndexFormatError(
+            f"Could not read disconnection index at '{path}': {exc}") from exc
     out["shape"] = tuple(int(s) for s in out["shape"])
     out["tract_codes"] = [str(c) for c in out["tract_codes"]]
+    out["layout"] = str(out["layout"])
     out["format_version"] = version
     out["n_streamlines"] = int(out["n_streamlines"])
     return out

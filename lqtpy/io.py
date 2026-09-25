@@ -46,6 +46,10 @@ def as_lesion_image(src) -> nib.Nifti1Image:
             # generic ValueError indistinguishable from an affine problem.
             raise InvalidLesionError(
                 f"Lesion array must have a numeric dtype, got {array.dtype}.")
+        if array.dtype == bool:
+            # nibabel can't store bool; without this cast the rejection
+            # surfaced as a misleading GeometryError about the affine.
+            array = array.astype(np.uint8)
         try:
             # nibabel decomposes the affine into a qform (SVD) at construction
             # time and raises its own (undocumented-type) error for a
@@ -96,27 +100,15 @@ def load_lesion(src, threshold: float = 0.5):
     """Load/coerce a lesion source and return ``(img, was_binary)``.
 
     ``src`` is anything :func:`as_lesion_image` accepts (a path, a nibabel
-    image, or an ``(array, affine)`` tuple). Non-binary volumes are
-    thresholded at ``threshold`` (values > threshold become 1) so downstream
-    code can assume a clean 0/1 mask.
+    image, or an ``(array, affine)`` tuple). Values > ``threshold`` become 1,
+    everything else (including NaN/inf) 0. Kept for backward compatibility;
+    new code should use :func:`lqtpy.prepare`, which does the same work once
+    and caches everything derived from it.
     """
-    img = as_lesion_image(src)
-    data = np.asarray(img.get_fdata())
-    data = np.nan_to_num(data)
-    # "Binary" means every value is exactly 0 or 1. An elementwise test is
-    # O(n); the previous np.unique sort was O(n log n) and cost ~80 ms on a
-    # 1 mm whole-brain grid, the dominant cost of every lqtpy.api call.
-    was_binary = bool(np.all((data == 0) | (data == 1)))
-    binmask = (data > threshold).astype(np.uint8)
-    if binmask.sum() == 0:
-        label = os.fspath(src) if isinstance(src, (str, os.PathLike)) else "<in-memory lesion>"
-        raise InvalidLesionError(
-            f"Lesion '{label}' is empty after thresholding at {threshold} "
-            f"(max value in image = {data.max()})."
-        )
-    header = getattr(img, "header", None)
-    out = nib.Nifti1Image(binmask, img.affine, header)
-    return out, bool(was_binary)
+    from .prepared import prepare
+
+    p = prepare(src, threshold)
+    return p.img, p.was_binary
 
 
 def resample_mask_to(lesion_img, ref_img):

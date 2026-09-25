@@ -33,100 +33,101 @@
 # cortex/white matter/vermal lobules -> Cerebellum; brain stem -> Brainstem;
 # the single unclassifiable "vessel" entry -> Subcortical (nearest
 # catch-all; it is not a lobe in any sense).
-LabelID,RegionName,Lobe
-4,left_lateral_ventricle,Ventricle
-5,left_inf_lat_vent,Ventricle
-6,left_cerebellum_exterior,Cerebellum
-7,left_cerebellum_white_matter,Cerebellum
-10,left_thalamus,Subcortical
-11,left_caudate,Subcortical
-12,left_putamen,Subcortical
-13,left_pallidum,Subcortical
-14,3rd_ventricle,Ventricle
-15,4th_ventricle,Ventricle
-16,brain_stem,Brainstem
-17,left_hippocampus,Limbic
-18,left_amygdala,Limbic
-24,csf,Ventricle
-26,left_accumbens_area,Subcortical
-28,left_ventraldc,Subcortical
-30,left_vessel,Subcortical
-43,right_lateral_ventricle,Ventricle
-44,right_inf_lat_vent,Ventricle
-45,right_cerebellum_exterior,Cerebellum
-46,right_cerebellum_white_matter,Cerebellum
-49,right_thalamus,Subcortical
-50,right_caudate,Subcortical
-51,right_putamen,Subcortical
-52,right_pallidum,Subcortical
-53,right_hippocampus,Limbic
-54,right_amygdala,Limbic
-58,right_accumbens_area,Subcortical
-60,right_ventraldc,Subcortical
-91,left_basal_forebrain,Subcortical
-92,right_basal_forebrain,Subcortical
-630,cerebellar_vermal_lobules_i_v,Cerebellum
-631,cerebellar_vermal_lobules_vi_vii,Cerebellum
-632,cerebellar_vermal_lobules_viii_x,Cerebellum
-1002,left_caudalanteriorcingulate,Limbic
-1003,left_caudalmiddlefrontal,Frontal
-1005,left_cuneus,Occipital
-1006,left_entorhinal,Limbic
-1007,left_fusiform,Temporal
-1008,left_inferiorparietal,Parietal
-1009,left_inferiortemporal,Temporal
-1010,left_isthmuscingulate,Limbic
-1011,left_lateraloccipital,Occipital
-1012,left_lateralorbitofrontal,Frontal
-1013,left_lingual,Occipital
-1014,left_medialorbitofrontal,Frontal
-1015,left_middletemporal,Temporal
-1016,left_parahippocampal,Limbic
-1017,left_paracentral,Frontal
-1018,left_parsopercularis,Frontal
-1019,left_parsorbitalis,Frontal
-1020,left_parstriangularis,Frontal
-1021,left_pericalcarine,Occipital
-1022,left_postcentral,Parietal
-1023,left_posteriorcingulate,Limbic
-1024,left_precentral,Frontal
-1025,left_precuneus,Parietal
-1026,left_rostralanteriorcingulate,Limbic
-1027,left_rostralmiddlefrontal,Frontal
-1028,left_superiorfrontal,Frontal
-1029,left_superiorparietal,Parietal
-1030,left_superiortemporal,Temporal
-1031,left_supramarginal,Parietal
-1034,left_transversetemporal,Temporal
-1035,left_insula,Insula
-2002,right_caudalanteriorcingulate,Limbic
-2003,right_caudalmiddlefrontal,Frontal
-2005,right_cuneus,Occipital
-2006,right_entorhinal,Limbic
-2007,right_fusiform,Temporal
-2008,right_inferiorparietal,Parietal
-2009,right_inferiortemporal,Temporal
-2010,right_isthmuscingulate,Limbic
-2011,right_lateraloccipital,Occipital
-2012,right_lateralorbitofrontal,Frontal
-2013,right_lingual,Occipital
-2014,right_medialorbitofrontal,Frontal
-2015,right_middletemporal,Temporal
-2016,right_parahippocampal,Limbic
-2017,right_paracentral,Frontal
-2018,right_parsopercularis,Frontal
-2019,right_parsorbitalis,Frontal
-2020,right_parstriangularis,Frontal
-2021,right_pericalcarine,Occipital
-2022,right_postcentral,Parietal
-2023,right_posteriorcingulate,Limbic
-2024,right_precentral,Frontal
-2025,right_precuneus,Parietal
-2026,right_rostralanteriorcingulate,Limbic
-2027,right_rostralmiddlefrontal,Frontal
-2028,right_superiorfrontal,Frontal
-2029,right_superiorparietal,Parietal
-2030,right_superiortemporal,Temporal
-2031,right_supramarginal,Parietal
-2034,right_transversetemporal,Temporal
-2035,right_insula,Insula
+# Schema v2 columns (tools/build_label_columns.py): DisplayName = readable name without hemisphere; Tissue = Cortex / Deep grey matter / Cerebellum / White matter / CSF / Brainstem / Other; Function = conservative common functional name, blank when none.
+LabelID,RegionName,Lobe,DisplayName,Tissue,Function
+4,left_lateral_ventricle,Ventricle,lateral ventricle,CSF,
+5,left_inf_lat_vent,Ventricle,inferior horn of the lateral ventricle,CSF,
+6,left_cerebellum_exterior,Cerebellum,cerebellar cortex,Cerebellum,
+7,left_cerebellum_white_matter,Cerebellum,cerebellar white matter,White matter,
+10,left_thalamus,Subcortical,thalamus,Deep grey matter,
+11,left_caudate,Subcortical,caudate nucleus,Deep grey matter,
+12,left_putamen,Subcortical,putamen,Deep grey matter,
+13,left_pallidum,Subcortical,globus pallidus,Deep grey matter,
+14,3rd_ventricle,Ventricle,third ventricle,CSF,
+15,4th_ventricle,Ventricle,fourth ventricle,CSF,
+16,brain_stem,Brainstem,brainstem,Brainstem,
+17,left_hippocampus,Limbic,hippocampus,Cortex,
+18,left_amygdala,Limbic,amygdala,Deep grey matter,
+24,csf,Ventricle,extra-cerebral CSF,CSF,
+26,left_accumbens_area,Subcortical,nucleus accumbens,Deep grey matter,
+28,left_ventraldc,Subcortical,ventral diencephalon,Deep grey matter,
+30,left_vessel,Subcortical,vessel,Other,
+43,right_lateral_ventricle,Ventricle,lateral ventricle,CSF,
+44,right_inf_lat_vent,Ventricle,inferior horn of the lateral ventricle,CSF,
+45,right_cerebellum_exterior,Cerebellum,cerebellar cortex,Cerebellum,
+46,right_cerebellum_white_matter,Cerebellum,cerebellar white matter,White matter,
+49,right_thalamus,Subcortical,thalamus,Deep grey matter,
+50,right_caudate,Subcortical,caudate nucleus,Deep grey matter,
+51,right_putamen,Subcortical,putamen,Deep grey matter,
+52,right_pallidum,Subcortical,globus pallidus,Deep grey matter,
+53,right_hippocampus,Limbic,hippocampus,Cortex,
+54,right_amygdala,Limbic,amygdala,Deep grey matter,
+58,right_accumbens_area,Subcortical,nucleus accumbens,Deep grey matter,
+60,right_ventraldc,Subcortical,ventral diencephalon,Deep grey matter,
+91,left_basal_forebrain,Subcortical,basal forebrain,Deep grey matter,
+92,right_basal_forebrain,Subcortical,basal forebrain,Deep grey matter,
+630,cerebellar_vermal_lobules_i_v,Cerebellum,"cerebellar vermis, lobules I-V",Cerebellum,
+631,cerebellar_vermal_lobules_vi_vii,Cerebellum,"cerebellar vermis, lobules VI-VII",Cerebellum,
+632,cerebellar_vermal_lobules_viii_x,Cerebellum,"cerebellar vermis, lobules VIII-X",Cerebellum,
+1002,left_caudalanteriorcingulate,Limbic,caudal anterior cingulate cortex,Cortex,
+1003,left_caudalmiddlefrontal,Frontal,caudal middle frontal gyrus,Cortex,
+1005,left_cuneus,Occipital,cuneus,Cortex,
+1006,left_entorhinal,Limbic,entorhinal cortex,Cortex,
+1007,left_fusiform,Temporal,fusiform gyrus,Cortex,
+1008,left_inferiorparietal,Parietal,inferior parietal cortex,Cortex,
+1009,left_inferiortemporal,Temporal,inferior temporal gyrus,Cortex,
+1010,left_isthmuscingulate,Limbic,isthmus of the cingulate gyrus,Cortex,
+1011,left_lateraloccipital,Occipital,lateral occipital cortex,Cortex,
+1012,left_lateralorbitofrontal,Frontal,lateral orbitofrontal cortex,Cortex,
+1013,left_lingual,Occipital,lingual gyrus,Cortex,
+1014,left_medialorbitofrontal,Frontal,medial orbitofrontal cortex,Cortex,
+1015,left_middletemporal,Temporal,middle temporal gyrus,Cortex,
+1016,left_parahippocampal,Limbic,parahippocampal gyrus,Cortex,
+1017,left_paracentral,Frontal,paracentral lobule,Cortex,leg motor and sensory area
+1018,left_parsopercularis,Frontal,"inferior frontal gyrus, pars opercularis",Cortex,Broca's area
+1019,left_parsorbitalis,Frontal,"inferior frontal gyrus, pars orbitalis",Cortex,
+1020,left_parstriangularis,Frontal,"inferior frontal gyrus, pars triangularis",Cortex,Broca's area
+1021,left_pericalcarine,Occipital,pericalcarine cortex,Cortex,primary visual cortex
+1022,left_postcentral,Parietal,postcentral gyrus,Cortex,primary somatosensory cortex
+1023,left_posteriorcingulate,Limbic,posterior cingulate cortex,Cortex,
+1024,left_precentral,Frontal,precentral gyrus,Cortex,primary motor cortex
+1025,left_precuneus,Parietal,precuneus,Cortex,
+1026,left_rostralanteriorcingulate,Limbic,rostral anterior cingulate cortex,Cortex,
+1027,left_rostralmiddlefrontal,Frontal,rostral middle frontal gyrus,Cortex,
+1028,left_superiorfrontal,Frontal,superior frontal gyrus,Cortex,
+1029,left_superiorparietal,Parietal,superior parietal lobule,Cortex,
+1030,left_superiortemporal,Temporal,superior temporal gyrus,Cortex,
+1031,left_supramarginal,Parietal,supramarginal gyrus,Cortex,
+1034,left_transversetemporal,Temporal,transverse temporal (Heschl's) gyrus,Cortex,primary auditory cortex
+1035,left_insula,Insula,insula,Cortex,
+2002,right_caudalanteriorcingulate,Limbic,caudal anterior cingulate cortex,Cortex,
+2003,right_caudalmiddlefrontal,Frontal,caudal middle frontal gyrus,Cortex,
+2005,right_cuneus,Occipital,cuneus,Cortex,
+2006,right_entorhinal,Limbic,entorhinal cortex,Cortex,
+2007,right_fusiform,Temporal,fusiform gyrus,Cortex,
+2008,right_inferiorparietal,Parietal,inferior parietal cortex,Cortex,
+2009,right_inferiortemporal,Temporal,inferior temporal gyrus,Cortex,
+2010,right_isthmuscingulate,Limbic,isthmus of the cingulate gyrus,Cortex,
+2011,right_lateraloccipital,Occipital,lateral occipital cortex,Cortex,
+2012,right_lateralorbitofrontal,Frontal,lateral orbitofrontal cortex,Cortex,
+2013,right_lingual,Occipital,lingual gyrus,Cortex,
+2014,right_medialorbitofrontal,Frontal,medial orbitofrontal cortex,Cortex,
+2015,right_middletemporal,Temporal,middle temporal gyrus,Cortex,
+2016,right_parahippocampal,Limbic,parahippocampal gyrus,Cortex,
+2017,right_paracentral,Frontal,paracentral lobule,Cortex,leg motor and sensory area
+2018,right_parsopercularis,Frontal,"inferior frontal gyrus, pars opercularis",Cortex,
+2019,right_parsorbitalis,Frontal,"inferior frontal gyrus, pars orbitalis",Cortex,
+2020,right_parstriangularis,Frontal,"inferior frontal gyrus, pars triangularis",Cortex,
+2021,right_pericalcarine,Occipital,pericalcarine cortex,Cortex,primary visual cortex
+2022,right_postcentral,Parietal,postcentral gyrus,Cortex,primary somatosensory cortex
+2023,right_posteriorcingulate,Limbic,posterior cingulate cortex,Cortex,
+2024,right_precentral,Frontal,precentral gyrus,Cortex,primary motor cortex
+2025,right_precuneus,Parietal,precuneus,Cortex,
+2026,right_rostralanteriorcingulate,Limbic,rostral anterior cingulate cortex,Cortex,
+2027,right_rostralmiddlefrontal,Frontal,rostral middle frontal gyrus,Cortex,
+2028,right_superiorfrontal,Frontal,superior frontal gyrus,Cortex,
+2029,right_superiorparietal,Parietal,superior parietal lobule,Cortex,
+2030,right_superiortemporal,Temporal,superior temporal gyrus,Cortex,
+2031,right_supramarginal,Parietal,supramarginal gyrus,Cortex,
+2034,right_transversetemporal,Temporal,transverse temporal (Heschl's) gyrus,Cortex,primary auditory cortex
+2035,right_insula,Insula,insula,Cortex,

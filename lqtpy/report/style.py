@@ -23,9 +23,15 @@ _VALID_DETAIL = ("summary", "standard", "full")
 
 # Accepts #rgb/#rgba/#rrggbb/#rrggbbaa, func(...) notations (rgb/rgba/hsl/
 # hsla/oklch/...), and bare CSS colour keywords (e.g. "red", "transparent",
-# "currentColor"). Not a full CSS-colour grammar -- just enough to catch
-# obviously-wrong values (empty strings, stray HTML, etc.) early.
-_COLOR_RE = re.compile(r"^(#[0-9a-fA-F]{3,8}|[a-zA-Z][a-zA-Z-]*\([^)]*\)|[a-zA-Z][a-zA-Z-]*)$")
+# "currentColor"). Not a full CSS-colour grammar. The values are
+# interpolated raw into a <style> block, so function arguments are limited
+# to the characters colour syntax actually uses (digits, letters for units/
+# "none"/"deg", . , % / space -); anything that could close the block or
+# start a new rule (; { } < > quotes) is rejected.
+_COLOR_RE = re.compile(
+    r"^(#[0-9a-fA-F]{3,8}"
+    r"|[a-zA-Z][a-zA-Z-]*\([0-9a-zA-Z.,%/\s+-]*\)"
+    r"|[a-zA-Z][a-zA-Z-]*)$")
 
 
 def _check_color(label: str, value) -> None:

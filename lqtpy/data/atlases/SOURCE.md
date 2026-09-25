@@ -1,6 +1,6 @@
 # Atlas provenance
 
-This directory bundles five files so that `pip install lqtpy` works offline. Each is
+This directory bundles four files (plus the label tables in `lqtpy/data/`) so that `pip install lqtpy` works offline. Each is
 redistributed here under its own academic/citation terms (see below) — none of these
 carry patient data; they are standard neuroimaging reference atlases.
 
@@ -126,7 +126,7 @@ sources were replaced with cleanly-licensed ones.
 - **Licence/attribution:** **CC BY-SA 4.0** (Creative Commons Attribution-ShareAlike 4.0
   International), per the licence statement on the labsolver.org page above (verified
   2026-09-18). This is **separate from and unrelated to** whatever licence `lqtpy`'s own
-  code takes (MIT; see `DATA-LICENSES.md`) — ShareAlike attaches to this
+  code takes (none is declared yet) — ShareAlike attaches to this
   specific derived data file, not automatically to the surrounding codebase. Neither of the
   authors of this note is a lawyer; if redistributing this file matters for a specific use
   case, get your own legal read on what "ShareAlike" requires for a derived voxel-index
@@ -155,3 +155,51 @@ LICENSE` in their `DESCRIPTION` (verified 2026-09-18 against CRAN's `ggseg` list
 packages' GitHub `DESCRIPTION`/`LICENSE` files, `LCBC-UiO/ggseg` and
 `ggseg/ggsegSchaefer`) — permissive, not GPL-family, and does not restrict redistributing
 derived polygon-coordinate data with attribution. This is **not** a publish blocker.
+
+---
+
+## `ArterialAtlas_level1_MNI152_1mm.nii.gz` and `../arterial_labels.csv`
+
+- **Full name:** Digital 3D Brain MRI Arterial Territories Atlas, level 1 (30 arterial
+  territories + lateral ventricles), Johns Hopkins University.
+- **Origin:** Downloaded 2026-09-25 from https://github.com/Chin-Fu-Liu/Arterial_Atlas,
+  `data/Atlas_182/ArterialAtlas.nii` (sha256 `426f2c59…34fe7233`) and
+  `data/ArterialAtlasLables.txt`.
+- **Modified:** (1) stored as int8, gzip-compressed; (2) **header origin added**. Both
+  released grids store a zero translation (sform/qform origin 0,0,0), which would put the
+  atlas ~120 mm from the brain. The 182×218×182 grid is FSL's MNI152 1 mm grid; a
+  translation-only registration to the bundled brain mask and to the DKT lateral ventricles
+  gives FSL's affine shifted **+2 mm in y and +1 mm in z** (ventricle Dice 0.703 vs 0.657
+  unshifted). Pinned by `tests/test_atlas_schema.py`. (3) Label table rewritten from the
+  source lookup table, whose level-2 codes for a few right-sided entries are inconsistent;
+  hemisphere is taken from the level-1 names and verified by region centroids.
+- **Licence:** Creative Commons Attribution-ShareAlike 4.0. The modified volume and label
+  table are distributed under the same licence.
+- **Citation:** Liu C-F, Hsu J, Xu X, et al. "Digital 3D Brain MRI Arterial Territories
+  Atlas." *Scientific Data* 10:74, 2023. DOI: 10.1038/s41597-022-01923-0.
+- **Checksum (bundled file):** sha256 `a1ce89be658294882463ebefdf491f2a97b721e8d661cbc5f921457798459a38`.
+- **Rebuild:** `python tools/build_extra_atlases.py <download dir>`.
+
+## `JHU-ICBM-labels-1mm.nii.gz` and `../jhu_labels.csv`
+
+- **Full name:** JHU ICBM-DTI-81 white-matter labels, 48 structures, MNI152 1 mm (FSL grid).
+- **Origin:** Downloaded 2026-09-25 from NeuroVault image 1401
+  (https://neurovault.org/media/images/264/JHU-ICBM-labels-1mm.nii.gz, sha256
+  `3c2bc4a2…188534ba`); label names from FSL's `JHU-labels.xml`. Left/right orientation
+  verified (every "R" label has a positive-x centroid), so this is the corrected release,
+  not the early mislabelled one.
+- **Modified:** stored as int8; display names lower-cased with "the" added
+  ("posterior limb of the internal capsule").
+- **Licence:** distributed with FSL under its atlas terms (free for academic use with
+  citation).
+- **Citation:** Mori S, Oishi K, Jiang H, et al. "Stereotaxic white matter atlas based on
+  diffusion tensor imaging in an ICBM template." *NeuroImage* 40(2):570-582, 2008. Also
+  Oishi K, et al. *NeuroImage* 46(2):486-499, 2009.
+- **Checksum (bundled file):** sha256 `5b18de3d31635c45c03f752e71c75174c60891d97fd9886f43db37b7afc43525`.
+
+## Brain mask (QC)
+
+No separate file: `lqtpy.qc.brain_mask()` is built at run time from the bundled AAL and
+DKT31+CMA volumes (union, hole-filled, dilated 2 voxels). nilearn's MNI152 brain mask was
+considered; it derives from the ICBM 2009a template (Dice 0.954 with this mask) whereas
+lesion masks here are usually on the FSL MNI152 grid the bundled atlases use.

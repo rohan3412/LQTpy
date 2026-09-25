@@ -16,6 +16,8 @@ _ATLAS_FILES = [
     "Schaefer2018_100Parcels_7Networks_order_FSLMNI152_1mm_resliced.nii.gz",
     "Schaefer2018_100Parcels_7Networks_order_FSLMNI152_1mm_resliced.csv",
     "aal.nii.gz",
+    "JHU-ICBM-labels-1mm.nii.gz",
+    "ArterialAtlas_level1_MNI152_1mm.nii.gz",
 ]
 
 _DATA_FILES = [
@@ -24,6 +26,9 @@ _DATA_FILES = [
     "ggseg_dk.csv.gz",
     "ggseg_schaefer100.csv.gz",
     "hcp842_tracts.npz",
+    "jhu_labels.csv",
+    "arterial_labels.csv",
+    "tract_disconnection_names.csv",
 ]
 
 

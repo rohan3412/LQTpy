@@ -83,9 +83,12 @@ def test_lesion_in_frontal_cortex_reports_frontal_dominant(atlas_key, cortical_l
     assert records, "expected at least one damaged lobe"
     top = records[0]
     assert top["Lobe"] == "Frontal"
-    # Frontal should carry the large majority of the lesion, not just a
-    # narrow plurality, given where the fixture is actually placed.
-    assert top["PercentOfLesion"] > 50.0
+    # Frontal should carry the large majority of the *labelled* part of the
+    # lesion, not just a narrow plurality, given where the fixture is placed.
+    # PercentOfLesion is relative to the whole lesion (white matter included),
+    # so compare against the share the atlas labels at all.
+    labelled = api.atlas_coverage(cortical_lesion_img, atlas_key)["PercentLabelled"]
+    assert top["PercentOfLesion"] > 0.5 * labelled
 
 
 # --------------------------------------------------------------------------- #

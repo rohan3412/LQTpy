@@ -17,10 +17,11 @@ from __future__ import annotations
 
 from . import fragments, style
 from ._standalone import render_group, render_single
+from .pdf import to_pdf
 from .style import DARK_STYLE, DEFAULT_STYLE, ReportStyle
 
 __all__ = [
-    "render_single", "render_group",
+    "render_single", "render_group", "to_pdf",
     "ReportStyle", "DEFAULT_STYLE", "DARK_STYLE",
     "fragments", "style",
 ]

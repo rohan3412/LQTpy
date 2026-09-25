@@ -36,3 +36,10 @@ print("\nTop AAL regions by % damaged:")
 for row in overlap[:3]:
     print(f"  {row['RegionName']:<20} {row['PercentDamage']:5.1f}% damaged, "
           f"{row['PercentOfLesion']:5.1f}% of lesion")
+
+# Prepare once to reuse the loaded lesion across calls, then get the
+# plain-language description and any mask quality flags.
+prepared = lqtpy.prepare(lesion)
+print("\nDescription:\n" + lqtpy.describe(prepared).text)
+flags = lqtpy.qc.check(prepared)
+print("\nQuality flags:", [f.message for f in flags] or "none")

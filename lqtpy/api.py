@@ -11,7 +11,11 @@ this directly.
 
 Every function accepts anything :func:`lqtpy.io.as_lesion_image` accepts for
 its ``lesion`` argument: a path (``str``/``os.PathLike``), a nibabel image,
-or an ``(array, affine)`` tuple.
+or an ``(array, affine)`` tuple -- or a :class:`~lqtpy.prepared.PreparedLesion`
+from :func:`lqtpy.prepare`. Preparing once and passing the result to several
+functions skips re-loading, re-thresholding and re-resampling the lesion;
+a prepared lesion keeps the threshold it was prepared with, and the
+``threshold`` argument is ignored for it.
 
 Threshold convention
 ---------------------
@@ -40,22 +44,30 @@ for a bad atlas key (HTTP 4xx), and
 from __future__ import annotations
 
 import numpy as np
-import nibabel as nib
 
 from . import _discon_index as _di
 from . import datasets as _datasets
 from .atlases import load_atlas
-from .io import load_lesion, resample_mask_to
 from .morphometry import compute_morphometry
+from .overlap import coverage as _coverage
 from .overlap import lobe_rollup as _lobe_rollup
 from .overlap import network_rollup as _network_rollup
-from .overlap import region_overlap as _region_overlap
+from .overlap import region_overlap_from_mask as _region_overlap_from_mask
+from .prepared import prepare
 from .tracts import tract_overlap as _tract_overlap
 
 __all__ = [
-    "lesion_stats", "atlas_overlap", "network_rollup_for", "lobe_overlap",
-    "tract_proxy_overlap", "tract_disconnection",
+    "lesion_stats", "atlas_overlap", "atlas_coverage", "network_rollup_for",
+    "lobe_overlap", "tract_proxy_overlap", "tract_disconnection",
 ]
+
+
+def _overlap(lesion, atlas_key, threshold):
+    """(prepared lesion, atlas, region records, lesion voxels on atlas grid)."""
+    atlas = load_atlas(atlas_key)
+    p = prepare(lesion, threshold)
+    gm = p.on_grid(atlas.img)
+    return p, atlas, _region_overlap_from_mask(gm.mask, atlas), gm.n_voxels
 
 
 def lesion_stats(lesion, *, threshold: float = 0.5) -> dict:
@@ -65,8 +77,7 @@ def lesion_stats(lesion, *, threshold: float = 0.5) -> dict:
     :func:`lqtpy.morphometry.compute_morphometry` computes (center of mass,
     bounding box, connected components, laterality...).
     """
-    img, _ = load_lesion(lesion, threshold)
-    return compute_morphometry(img)
+    return compute_morphometry(prepare(lesion, threshold))
 
 
 def atlas_overlap(lesion, atlas_key: str, *, threshold: float = 0.5) -> "list[dict]":
@@ -77,9 +88,17 @@ def atlas_overlap(lesion, atlas_key: str, *, threshold: float = 0.5) -> "list[di
     :func:`lqtpy.atlases.register_atlas`/:func:`lqtpy.atlases.atlas_from_arrays`).
     Raises :class:`~lqtpy.errors.UnknownAtlasError` for an unregistered key.
     """
-    atlas = load_atlas(atlas_key)
-    img, _ = load_lesion(lesion, threshold)
-    return _region_overlap(img, atlas)
+    return _overlap(lesion, atlas_key, threshold)[2]
+
+
+def atlas_coverage(lesion, atlas_key: str, *, threshold: float = 0.5) -> dict:
+    """How much of the lesion ``atlas_key`` can describe: labelled vs
+    unlabelled lesion voxels on the atlas grid, and lesion voxels outside the
+    atlas's field of view. See :func:`lqtpy.overlap.coverage`.
+
+    Region rows' ``PercentOfLesion`` plus ``PercentUnlabelled`` add up to 100.
+    """
+    return _coverage(prepare(lesion, threshold), load_atlas(atlas_key))
 
 
 def network_rollup_for(lesion, atlas_key: str, *, threshold: float = 0.5) -> "list[dict]":
@@ -91,10 +110,8 @@ def network_rollup_for(lesion, atlas_key: str, *, threshold: float = 0.5) -> "li
     networks; :func:`lqtpy.report.fragments.network_rollup_fragment` titles
     itself from the data for the same reason.
     """
-    atlas = load_atlas(atlas_key)
-    img, _ = load_lesion(lesion, threshold)
-    overlap = _region_overlap(img, atlas)
-    return _network_rollup(overlap, atlas)
+    _, atlas, overlap, total = _overlap(lesion, atlas_key, threshold)
+    return _network_rollup(overlap, atlas, lesion_total=total)
 
 
 def lobe_overlap(lesion, atlas_key: str, *, threshold: float = 0.5) -> "list[dict]":
@@ -111,9 +128,11 @@ def lobe_overlap(lesion, atlas_key: str, *, threshold: float = 0.5) -> "list[dic
     lobe mapping for any region.
     """
     atlas = load_atlas(atlas_key)
-    img, _ = load_lesion(lesion, threshold)
-    overlap = _region_overlap(img, atlas)
-    return _lobe_rollup(overlap, atlas)
+    from .overlap import atlas_has_lobes
+    if not atlas_has_lobes(atlas):
+        return _lobe_rollup([], atlas)  # raises NoLobeMappingError
+    _, atlas, overlap, total = _overlap(lesion, atlas_key, threshold)
+    return _lobe_rollup(overlap, atlas, lesion_total=total)
 
 
 def tract_proxy_overlap(lesion, *, threshold: float = 0.5) -> "list[dict]":
@@ -128,8 +147,7 @@ def tract_proxy_overlap(lesion, *, threshold: float = 0.5) -> "list[dict]":
     :func:`tract_disconnection`, which requires a locally-built index
     (:mod:`lqtpy.datasets`) that this function does not.
     """
-    img, _ = load_lesion(lesion, threshold)
-    return _tract_overlap(img)
+    return _tract_overlap(prepare(lesion, threshold))
 
 
 def tract_disconnection(lesion, *, threshold: float = 0.5,
@@ -204,15 +222,14 @@ def tract_disconnection(lesion, *, threshold: float = 0.5,
     # of whether an index has been built -- matches lesion_stats/every
     # other function here, which never need index/atlas data to reject a
     # bad lesion.
-    img, _ = load_lesion(lesion, threshold)
+    p = prepare(lesion, threshold)
 
     if index_path is not None:
         index = _di.load_index(index_path)
     else:
         index = _datasets._load_discon_index()
 
-    ref_img = nib.Nifti1Image(np.zeros(index["shape"], dtype=np.uint8), index["affine"])
-    mask = resample_mask_to(img, ref_img)
+    mask = p.on_grid((tuple(index["shape"]), np.asarray(index["affine"]))).mask
     lesion_voxel_keys = np.flatnonzero(mask.ravel())
 
     streamline_ids = _di.gather_streamline_ids(lesion_voxel_keys, index)

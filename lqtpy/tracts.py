@@ -27,7 +27,6 @@ import nibabel as nib
 
 from .atlases import DATA_DIR
 from .errors import DataUnavailableError, MissingDependencyError
-from .io import resample_mask_to
 
 # Precomputed tract voxel indices (built by tools/build_tract_index.py). Reading
 # the raw 4D nifti per-volume re-decompresses the whole gzip stream (~130 s), so
@@ -70,7 +69,7 @@ def _load_tracts():
                 f"White-matter tract index not found at '{_TRACT_NPZ}'. This "
                 "data file should ship inside the package; reinstall lqtpy.")
 
-        npz = np.load(_TRACT_NPZ, allow_pickle=True)
+        npz = np.load(_TRACT_NPZ, allow_pickle=False)
         shape3 = tuple(int(s) for s in npz["shape"])
         affine = npz["affine"]
         names = list(npz["names"])
@@ -104,8 +103,11 @@ def tract_overlap(lesion_img, frame: str | None = None):
     ``frame="pandas"`` for a DataFrame instead (lazy import; raises a clear
     ``ImportError`` naming the ``tables`` extra if pandas isn't installed).
     """
+    from .prepared import PreparedLesion, prepare
+
     cache = _load_tracts()
-    mask_flat = resample_mask_to(lesion_img, cache["ref"]).ravel()
+    p = lesion_img if isinstance(lesion_img, PreparedLesion) else prepare(lesion_img, threshold=0.0)
+    mask_flat = p.on_grid(cache["ref"]).mask.ravel()
     lesion_total = int(mask_flat.sum())
 
     rows = []

@@ -91,3 +91,22 @@ class DataUnavailableError(LQTpyError, FileNotFoundError):
     ``except FileNotFoundError``/``except OSError`` callers keep working
     unchanged.
     """
+
+
+class IndexFormatError(DataUnavailableError):
+    """Internal/environment failure -- maps to HTTP 5xx.
+
+    A data file exists but can't be used: a disconnection index built by
+    an older lqtpy (wrong ``format_version``), or a file that isn't an index
+    at all. The fix is to rebuild it, so this is a kind of
+    :class:`DataUnavailableError`.
+    """
+
+
+class InvalidAtlasError(LQTpyError, ValueError):
+    """Caller mistake -- maps to HTTP 4xx.
+
+    Raised by :func:`lqtpy.atlases.register_atlas` for a label volume or
+    label table that can't be used: negative label ids, non-integer label
+    values, or a label table that doesn't match the volume.
+    """

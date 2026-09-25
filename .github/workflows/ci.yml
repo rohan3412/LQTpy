@@ -113,8 +113,14 @@ jobs:
           python -m zipfile -l "$WHEEL" | tee wheel-contents.txt
           for f in \
             "lqtpy/data/atlases/aal.nii.gz" \
-            "lqtpy/data/atlases/FreeSurferDKT.nii.gz" \
-            "lqtpy/data/atlases/FreeSurferDKT.txt" \
+            "lqtpy/data/atlases/OASIS-TRT-20_jointfusion_DKT31_CMA_labels_in_MNI152_v2.nii.gz" \
+            "lqtpy/data/dkt31_cma_labels.csv" \
+            "lqtpy/data/aal_labels.csv" \
+            "lqtpy/data/hcp842_tracts.npz" \
+            "lqtpy/data/atlases/JHU-ICBM-labels-1mm.nii.gz" \
+            "lqtpy/data/atlases/ArterialAtlas_level1_MNI152_1mm.nii.gz" \
+            "lqtpy/data/jhu_labels.csv" \
+            "lqtpy/data/arterial_labels.csv" \
             "lqtpy/data/atlases/Schaefer2018_100Parcels_7Networks_order_FSLMNI152_1mm_resliced.nii.gz" \
             "lqtpy/data/atlases/Schaefer2018_100Parcels_7Networks_order_FSLMNI152_1mm_resliced.csv" \
           ; do
@@ -123,7 +129,7 @@ jobs:
               exit 1
             fi
           done
-          echo "OK: all 5 bundled atlas files present in the wheel"
+          echo "OK: all bundled atlas/label files present in the wheel"
 
       - name: Install the built wheel into a fresh environment
         run: |

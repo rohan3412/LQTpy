@@ -59,7 +59,8 @@ def test_network_rollup_for_matches_network_rollup(fixture_name, request):
     img = request.getfixturevalue(fixture_name)
     lesion_img, _ = load_lesion(img, threshold=0.5)
     atlas = load_atlas("schaefer")
-    expected = network_rollup(region_overlap(lesion_img, atlas), atlas)
+    total = api.atlas_coverage(img, "schaefer")["LesionVoxelsOnGrid"]
+    expected = network_rollup(region_overlap(lesion_img, atlas), atlas, lesion_total=total)
     assert api.network_rollup_for(img, "schaefer") == expected
 
 
@@ -69,8 +70,25 @@ def test_lobe_overlap_matches_lobe_rollup(fixture_name, atlas_key, request):
     img = request.getfixturevalue(fixture_name)
     lesion_img, _ = load_lesion(img, threshold=0.5)
     atlas = load_atlas(atlas_key)
-    expected = lobe_rollup(region_overlap(lesion_img, atlas), atlas)
+    total = api.atlas_coverage(img, atlas_key)["LesionVoxelsOnGrid"]
+    expected = lobe_rollup(region_overlap(lesion_img, atlas), atlas, lesion_total=total)
     assert api.lobe_overlap(img, atlas_key) == expected
+
+
+@pytest.mark.parametrize("atlas_key", ["aal", "schaefer", "dk"])
+@pytest.mark.parametrize("fixture_name", _FIXTURES)
+def test_percent_of_lesion_has_one_denominator(fixture_name, atlas_key, request):
+    """Region rows + unlabelled share add up to 100%, and rollups sum to the
+    same labelled share -- PercentOfLesion means one thing everywhere."""
+    img = request.getfixturevalue(fixture_name)
+    cov = api.atlas_coverage(img, atlas_key)
+    regions = api.atlas_overlap(img, atlas_key)
+    reg_sum = sum(r["PercentOfLesion"] for r in regions)
+    assert reg_sum + cov["PercentUnlabelled"] == pytest.approx(100.0, abs=0.05 * max(1, len(regions)))
+    assert sum(r["LesionVoxels"] for r in regions) == cov["LabelledVoxels"]
+    rollup = (api.network_rollup_for(img, atlas_key) if atlas_key == "schaefer"
+              else api.lobe_overlap(img, atlas_key))
+    assert sum(r["PercentOfLesion"] for r in rollup) == pytest.approx(reg_sum, abs=0.05 * max(1, len(regions)))
 
 
 def test_lobe_overlap_unmapped_atlas_raises_typed_error(sphere_lesion_img):

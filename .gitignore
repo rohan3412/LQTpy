@@ -18,3 +18,43 @@ venv/
 env/
 
 .claude/
+
+# Analysis outputs: reports, tables and descriptions are named after the input
+# file and embed its path, which for patient data can contain the patient's
+# name. analyze_single/analyze_group write to ./lqtpy_output/ by default.
+lqtpy_output/
+*_report.html
+*_report.pdf
+group_report.html
+group_report.pdf
+*_description.txt
+*_summary.json
+*_morphometry.json
+
+# Locally built / downloaded data that must not be committed: the streamline
+# disconnection index (~18 MB, built by tools/build_discon_index.py), raw
+# tractography and third-party source data, and per-lesion cohort feature
+# files from calibration scans (tools/calibrate_shape_cohort.py reads these;
+# only the aggregate lqtpy/data/shape_reference.json is committed).
+discon_index*.npz
+extdata/
+*.trk
+*.trk.gz
+*.tck
+cohort_features*.jsonl
+
+# Tooling caches
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.log
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

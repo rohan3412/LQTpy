@@ -18,7 +18,7 @@ def use_agg():
     matplotlib.use("Agg")
 
 
-def _fig_to_uri(fig, dpi: int = 110) -> str:
+def _fig_to_uri(fig, dpi: int = 120) -> str:
     import matplotlib.pyplot as plt
 
     buf = io.BytesIO()
@@ -41,26 +41,37 @@ def _safe(fn):
         return None
 
 
-def glass_brain_png(lesion_img, title="Lesion (glass brain)") -> str | None:
+#: The report's lesion hue (see ggseg_flat.THEMES): one colour for "lesion"
+#: in every brain figure, on a black plate that works in light and dark themes.
+LESION_HEX = "#f5793a"
+
+
+def _lesion_cmap():
+    from matplotlib.colors import ListedColormap
+    return ListedColormap([LESION_HEX, LESION_HEX])
+
+
+def glass_brain_png(lesion_img, title=None) -> str | None:
     from nilearn import plotting
 
     def build():
         disp = plotting.plot_glass_brain(
-            lesion_img, title=title, cmap="autumn", colorbar=False,
-            display_mode="lyrz", alpha=0.9, threshold=0.5,
+            lesion_img, title=title, cmap=_lesion_cmap(), colorbar=False,
+            display_mode="lyrz", alpha=0.95, threshold=0.5, black_bg=True,
         )
         fig = disp.frame_axes.figure
         return _fig_to_uri(fig)
     return _safe(build)
 
 
-def slices_png(lesion_img, cut_coords, title="Lesion overlay") -> str | None:
+def slices_png(lesion_img, cut_coords, title=None) -> str | None:
     from nilearn import plotting
 
     def build():
         disp = plotting.plot_roi(
             lesion_img, title=title, cut_coords=cut_coords,
-            display_mode="ortho", cmap="autumn", alpha=0.7, colorbar=False,
+            display_mode="ortho", cmap=_lesion_cmap(), alpha=0.75, colorbar=False,
+            black_bg=True,
         )
         fig = disp.frame_axes.figure
         return _fig_to_uri(fig)
@@ -132,10 +143,10 @@ def _ggseg_dir(atlas_key: str) -> str:
     return os.path.join(os.path.dirname(ggseg.__file__), "data", atlas_key)
 
 
-def render_ggseg(data: dict, atlas_key: str, cmap="Reds", vmax=None,
-                 title="", ylabel="Percent damage (%)", lw=1.6,
-                 edgecolor="black", na_color="#b8bcc2", figsize=(9, 6),
-                 fontsize=13) -> str | None:
+def render_ggseg(data: dict, atlas_key: str, cmap=None, vmax=None,
+                 title="", ylabel="Percent damaged (%)", lw=1.6,
+                 edgecolor=None, na_color=None, figsize=(9, 6),
+                 fontsize=13, theme: str = "light") -> str | None:
     """Draw a ggseg flat-brain map with the classic thick-black-border style.
 
     ``data`` maps ggseg region keys -> values. Labelled regions are coloured by
@@ -144,6 +155,11 @@ def render_ggseg(data: dict, atlas_key: str, cmap="Reds", vmax=None,
     """
     if not data:
         return None
+    from .ggseg_flat import THEMES, lesion_cmap
+    t = THEMES[theme]
+    cmap = cmap or lesion_cmap(theme)
+    edgecolor = edgecolor or t["edge"]
+    na_color = na_color or t["na"]
 
     def build():
         import os
@@ -158,8 +174,8 @@ def render_ggseg(data: dict, atlas_key: str, cmap="Reds", vmax=None,
         plt.close("all")
 
         outline_txt = [open(os.path.join(wd, e)).read() for e in outlines]
-        ax = ggseg._create_figure_(outline_txt, figsize, "white", title,
-                                   fontsize, "black")
+        ax = ggseg._create_figure_(outline_txt, figsize, t["bg"], title,
+                                   fontsize, t["fg"])
 
         def patch(text, facecolor):
             codes, verts = ggseg._svg_parse_(text)
@@ -175,34 +191,35 @@ def render_ggseg(data: dict, atlas_key: str, cmap="Reds", vmax=None,
             patch(open(os.path.join(wd, r)).read(), na_color)
 
         vmx = vmax if vmax is not None else max(1.0, max(data.values()))
-        cm, norm = ggseg._get_cmap_(cmap, data.values(), vminmax=[0, vmx])
+        import matplotlib.colors as mcolors
+        cm = cmap if not isinstance(cmap, str) else plt.get_cmap(cmap)
+        norm = mcolors.Normalize(vmin=0, vmax=vmx)
         for key, val in data.items():
             fp = os.path.join(wd, key)
             if os.path.isfile(fp):
                 patch(open(fp).read(), cm(norm(val)))
 
-        ggseg._add_colorbar_(ax, cm, norm, "black", fontsize * 0.7, ylabel)
+        ggseg._add_colorbar_(ax, cm, norm, t["fg"], fontsize * 0.7, ylabel)
         fig = ax.figure
-        fig.set_facecolor("white")
+        fig.set_facecolor(t["bg"])
         return _fig_to_uri(fig)
     return _safe(build)
 
 
-def ggseg_aseg_png(damage_by_aseg: dict,
-                   title="Subcortical damage (aseg)") -> str | None:
-    """Render an aseg subcortical/cerebellar map coloured by percent damage."""
-    return render_ggseg(damage_by_aseg, "aseg", cmap="Reds", title=title)
+def ggseg_aseg_png(damage_by_aseg: dict, title="", theme: str = "light") -> str | None:
+    """Render an aseg subcortical/cerebellar map coloured by percent damaged."""
+    return render_ggseg(damage_by_aseg, "aseg", title=title, theme=theme)
 
 
 def group_overlap_png(freq_img, n_subjects, title=None) -> str | None:
     from nilearn import plotting
 
     def build():
-        ttl = title or f"Lesion overlap (n={n_subjects})"
+        from .ggseg_flat import lesion_cmap
         disp = plotting.plot_stat_map(
-            freq_img, title=ttl, cmap="hot", colorbar=True, threshold=0.5,
+            freq_img, title=title, cmap=lesion_cmap("dark"), colorbar=True, threshold=0.5,
             vmax=max(1, int(n_subjects)), display_mode="z", cut_coords=6,
-            black_bg=False,
+            black_bg=True,
         )
         fig = disp.frame_axes.figure
         return _fig_to_uri(fig)
@@ -214,25 +231,26 @@ def group_damage_bar_png(df, top=15, title="Most frequently damaged regions") ->
     if df is None or df.empty:
         return None
     d = df.head(top)
-    annot = [f"n={n}" for n in d["NSubjects"]]
-    return _hbar_png(d["RegionName"], d["MeanPercentDamage"],
-                     "Mean percent damage across affected subjects (%)",
+    annot = [f"n={n}/{t}" for n, t in zip(d["NSubjects"], d["NSubjectsTotal"])]
+    return _hbar_png(d["RegionName"], d["CohortMeanPercentDamage"],
+                     "Mean percent damaged, all subjects (%)",
                      title, "#8a2f8f", annot=annot)
 
 
 def group_network_bar_png(df, title="Network involvement (group)") -> str | None:
     if df is None or df.empty:
         return None
-    annot = [f"n={n}" for n in df["NSubjects"]]
-    return _hbar_png(df["Network"], df["MeanPercentDamage"],
-                     "Mean percent of network damaged (%)", title, "#2f6f8a", annot=annot)
+    annot = [f"n={n}/{t}" for n, t in zip(df["NSubjects"], df["NSubjectsTotal"])]
+    return _hbar_png(df["Network"], df["CohortMeanPercentDamage"],
+                     "Mean percent of network damaged, all subjects (%)", title, "#2f6f8a",
+                     annot=annot)
 
 
 def group_tract_bar_png(df, top=15, title="Tract overlap (group)") -> str | None:
     if df is None or df.empty:
         return None
     d = df.head(top)
-    annot = [f"n={n}" for n in d["NSubjects"]]
-    return _hbar_png(d["Tract"], d["MeanPercentOverlap"],
-                     "Mean percent of tract territory lesioned (%)",
+    annot = [f"n={n}/{t}" for n, t in zip(d["NSubjects"], d["NSubjectsTotal"])]
+    return _hbar_png(d["Tract"], d["CohortMeanPercentOverlap"],
+                     "Mean percent of tract territory lesioned, all subjects (%)",
                      title, "#5b8c3e", annot=annot)

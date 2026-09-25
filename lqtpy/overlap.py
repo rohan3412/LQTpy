@@ -4,14 +4,26 @@ Every function here returns **records** (``list[dict]``) by default -- the
 internal representation used throughout ``lqtpy``. Pass ``frame="pandas"`` to
 get a ``pandas.DataFrame`` instead (imported lazily; raises a clear
 ``ImportError`` naming the ``tables`` extra if pandas isn't installed).
+
+PercentOfLesion
+---------------
+Everywhere in lqtpy -- region rows, network/lobe rollups -- ``PercentOfLesion``
+has one denominator: **every lesion voxel on the atlas grid**, labelled or
+not. The part of the lesion that falls in no region is reported explicitly
+by :func:`coverage` (``PercentUnlabelled``) instead of silently inflating
+the rollups, so region rows + unlabelled add up to 100%. Lesion voxels
+outside the atlas's field of view can't be on its grid at all; ``coverage``
+reports those separately (``PercentOutsideFOV``, a share of the lesion's
+own voxels).
 """
 from __future__ import annotations
+
+import warnings
 
 import numpy as np
 
 from .atlases import Atlas
 from .errors import MissingDependencyError, NoLobeMappingError
-from .io import resample_mask_to
 
 _COLUMNS = ["LabelID", "RegionName", "Group", "RegionVoxels",
             "LesionVoxels", "PercentDamage", "PercentOfLesion"]
@@ -81,18 +93,79 @@ def region_overlap_from_mask(mask, atlas: Atlas, frame: str | None = None):
     return _finish(rows, _COLUMNS, frame)
 
 
-def region_overlap(lesion_img, atlas: Atlas, frame: str | None = None):
-    """Resample ``lesion_img`` onto the atlas grid, then compute region overlap."""
-    mask = resample_mask_to(lesion_img, atlas.img)
-    return region_overlap_from_mask(mask, atlas, frame=frame)
+def _grid_mask(lesion, atlas: Atlas):
+    """The lesion on ``atlas``'s grid, as a :class:`~lqtpy.prepared.GridMask`.
+    ``lesion`` is a PreparedLesion or a binary image (``> 0`` = lesion)."""
+    from .prepared import PreparedLesion, prepare
+    p = lesion if isinstance(lesion, PreparedLesion) else prepare(lesion, threshold=0.0)
+    return p.on_grid(atlas.img)
 
 
-def network_rollup(overlap_records, atlas: Atlas, frame: str | None = None):
+def region_overlap(lesion, atlas: Atlas, frame: str | None = None):
+    """Resample ``lesion`` onto the atlas grid, then compute region overlap.
+
+    ``lesion`` is a :class:`~lqtpy.prepared.PreparedLesion` or a binary
+    image (``> 0`` = lesion)."""
+    return region_overlap_from_mask(_grid_mask(lesion, atlas).mask, atlas, frame=frame)
+
+
+_COVERAGE_KEYS = ["LesionVoxelsOnGrid", "LabelledVoxels", "UnlabelledVoxels",
+                  "PercentLabelled", "PercentUnlabelled",
+                  "OutsideFOVVoxels", "PercentOutsideFOV"]
+
+
+def coverage(lesion, atlas: Atlas) -> dict:
+    """How much of the lesion the atlas can describe.
+
+    - ``LesionVoxelsOnGrid``: lesion voxels after resampling to the atlas
+      grid (the ``PercentOfLesion`` denominator everywhere).
+    - ``LabelledVoxels``/``PercentLabelled``: of those, voxels inside a
+      region listed in the atlas's label table.
+    - ``UnlabelledVoxels``/``PercentUnlabelled``: the rest -- typically
+      white matter or CSF for a grey-matter atlas.
+    - ``OutsideFOVVoxels``/``PercentOutsideFOV``: lesion voxels (on the
+      lesion's own grid) that fall outside the atlas's field of view.
+    """
+    gm = _grid_mask(lesion, atlas)
+    labels = atlas.label_array()
+    hit = labels[gm.mask]
+    known = np.zeros(max(int(labels.max()), max(atlas.labels, default=0)) + 1, dtype=bool)
+    ids = np.fromiter((k for k in atlas.labels if k >= 0), dtype=np.int64)
+    known[ids[ids < known.size]] = True
+    labelled = int(np.count_nonzero(known[hit[hit >= 0]])) if hit.size else 0
+    total = gm.n_voxels
+    return {
+        "LesionVoxelsOnGrid": total,
+        "LabelledVoxels": labelled,
+        "UnlabelledVoxels": total - labelled,
+        "PercentLabelled": round(100.0 * labelled / total, 2) if total else 0.0,
+        "PercentUnlabelled": round(100.0 * (total - labelled) / total, 2) if total else 0.0,
+        "OutsideFOVVoxels": gm.outside_fov_voxels,
+        "PercentOutsideFOV": round(100.0 * gm.outside_fov_fraction, 2),
+    }
+
+
+def _lesion_total(overlap_records, lesion_total, fn_name):
+    if lesion_total is not None:
+        return int(lesion_total)
+    warnings.warn(
+        f"{fn_name}() called without lesion_total: PercentOfLesion will be "
+        "relative to labelled lesion voxels only, not the whole lesion. Pass "
+        "lesion_total (e.g. coverage(...)['LesionVoxelsOnGrid']), or use "
+        "lqtpy.api, which does.", stacklevel=3)
+    return sum(r["LesionVoxels"] for r in overlap_records)
+
+
+def network_rollup(overlap_records, atlas: Atlas, frame: str | None = None, *,
+                   lesion_total: "int | None" = None):
     """Aggregate per-region damage to per-network (Yeo-7) totals.
 
     Denominators use the atlas's full per-network voxel totals (including
     undamaged regions) so PercentDamage is correct. Intended for the Schaefer
     atlas, whose ``Group`` column is the Yeo network token.
+
+    ``lesion_total`` is the whole lesion's voxel count on the atlas grid
+    (the ``PercentOfLesion`` denominator; see the module docstring).
 
     ``overlap_records`` is the records (or DataFrame) returned by
     ``region_overlap``/``region_overlap_from_mask``. Returns records with
@@ -107,7 +180,7 @@ def network_rollup(overlap_records, atlas: Atlas, frame: str | None = None):
         vox = int(region_voxels[lid]) if lid < len(region_voxels) else 0
         net_total[meta.Group] = net_total.get(meta.Group, 0) + vox
 
-    lesion_grand_total = sum(r["LesionVoxels"] for r in overlap_records)
+    lesion_grand_total = _lesion_total(overlap_records, lesion_total, "network_rollup")
 
     # Group by "Group" (network), preserving first-seen order -- matches the
     # DataFrame's original row order into groupby, before the final sort.
@@ -138,7 +211,8 @@ def atlas_has_lobes(atlas: Atlas) -> bool:
     return any(meta.Lobe for meta in atlas.labels.values())
 
 
-def lobe_rollup(overlap_records, atlas: Atlas, frame: str | None = None):
+def lobe_rollup(overlap_records, atlas: Atlas, frame: str | None = None, *,
+                lesion_total: "int | None" = None):
     """Aggregate per-region damage to per-lobe totals.
 
     Mirrors :func:`network_rollup` in shape and conventions, but groups by
@@ -152,6 +226,8 @@ def lobe_rollup(overlap_records, atlas: Atlas, frame: str | None = None):
     ``region_overlap``/``region_overlap_from_mask``. Returns records with
     keys Lobe, LobeVoxels, LesionVoxels, PercentDamage, PercentOfLesion,
     sorted by PercentDamage descending.
+
+    ``lesion_total``: as for :func:`network_rollup`.
 
     Raises :class:`~lqtpy.errors.NoLobeMappingError` if ``atlas`` doesn't
     define a lobe for any region (see :func:`atlas_has_lobes`).
@@ -171,7 +247,7 @@ def lobe_rollup(overlap_records, atlas: Atlas, frame: str | None = None):
         vox = int(region_voxels[lid]) if lid < len(region_voxels) else 0
         lobe_total[meta.Lobe] = lobe_total.get(meta.Lobe, 0) + vox
 
-    lesion_grand_total = sum(r["LesionVoxels"] for r in overlap_records)
+    lesion_grand_total = _lesion_total(overlap_records, lesion_total, "lobe_rollup")
 
     # Group by each region's LabelID -> Lobe (overlap records only carry
     # Group, not Lobe, so look the region back up in the atlas).

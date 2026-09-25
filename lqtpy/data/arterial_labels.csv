@@ -1,0 +1,34 @@
+# Johns Hopkins arterial territory atlas, level 1 (Liu et al. 2023, Sci Data 10:74; CC BY-SA 4.0). Group/Territory = major territory (ACA/MCA/PCA/VB); Supply = deep (perforator) or cortical (branch) territory. Built by tools/build_extra_atlases.py.
+LabelID,RegionName,Group,Lobe,DisplayName,Hemisphere,Tissue,Function,Territory,Supply,Code
+1,anterior_cerebral_artery_territory_L,ACA,,anterior cerebral artery territory,L,,,ACA,cortical,ACA_cortical
+2,anterior_cerebral_artery_territory_R,ACA,,anterior cerebral artery territory,R,,,ACA,cortical,ACA_cortical
+3,medial_lenticulostriate_territory_L,ACA,,medial lenticulostriate territory,L,,,ACA,deep,ACA_deep
+4,medial_lenticulostriate_territory_R,ACA,,medial lenticulostriate territory,R,,,ACA,deep,ACA_deep
+5,lateral_lenticulostriate_territory_L,MCA,,lateral lenticulostriate territory,L,,,MCA,deep,MCA_deep
+6,lateral_lenticulostriate_territory_R,MCA,,lateral lenticulostriate territory,R,,,MCA,deep,MCA_deep
+7,middle_cerebral_artery_territory_frontal_part_L,MCA,,"middle cerebral artery territory, frontal part",L,,,MCA,cortical,MCA_cortical
+8,middle_cerebral_artery_territory_frontal_part_R,MCA,,"middle cerebral artery territory, frontal part",R,,,MCA,cortical,MCA_cortical
+9,middle_cerebral_artery_territory_parietal_part_L,MCA,,"middle cerebral artery territory, parietal part",L,,,MCA,cortical,MCA_cortical
+10,middle_cerebral_artery_territory_parietal_part_R,MCA,,"middle cerebral artery territory, parietal part",R,,,MCA,cortical,MCA_cortical
+11,middle_cerebral_artery_territory_temporal_part_L,MCA,,"middle cerebral artery territory, temporal part",L,,,MCA,cortical,MCA_cortical
+12,middle_cerebral_artery_territory_temporal_part_R,MCA,,"middle cerebral artery territory, temporal part",R,,,MCA,cortical,MCA_cortical
+13,middle_cerebral_artery_territory_occipital_part_L,MCA,,"middle cerebral artery territory, occipital part",L,,,MCA,cortical,MCA_cortical
+14,middle_cerebral_artery_territory_occipital_part_R,MCA,,"middle cerebral artery territory, occipital part",R,,,MCA,cortical,MCA_cortical
+15,middle_cerebral_artery_territory_insular_part_L,MCA,,"middle cerebral artery territory, insular part",L,,,MCA,cortical,MCA_cortical
+16,middle_cerebral_artery_territory_insular_part_R,MCA,,"middle cerebral artery territory, insular part",R,,,MCA,cortical,MCA_cortical
+17,posterior_cerebral_artery_territory_temporal_part_L,PCA,,"posterior cerebral artery territory, temporal part",L,,,PCA,cortical,PCA_cortical
+18,posterior_cerebral_artery_territory_temporal_part_R,PCA,,"posterior cerebral artery territory, temporal part",R,,,PCA,cortical,PCA_cortical
+19,posterior_cerebral_artery_territory_occipital_part_L,PCA,,"posterior cerebral artery territory, occipital part",L,,,PCA,cortical,PCA_cortical
+20,posterior_cerebral_artery_territory_occipital_part_R,PCA,,"posterior cerebral artery territory, occipital part",R,,,PCA,cortical,PCA_cortical
+21,posterior_choroidal_and_thalamoperforator_territory_L,PCA,,posterior choroidal and thalamoperforator territory,L,,,PCA,deep,PCA_deep
+22,posterior_choroidal_and_thalamoperforator_territory_R,PCA,,posterior choroidal and thalamoperforator territory,R,,,PCA,deep,PCA_deep
+23,anterior_choroidal_and_thalamoperforator_territory_L,PCA,,anterior choroidal and thalamoperforator territory,L,,,PCA,deep,PCA_deep
+24,anterior_choroidal_and_thalamoperforator_territory_R,PCA,,anterior choroidal and thalamoperforator territory,R,,,PCA,deep,PCA_deep
+25,basilar_artery_territory_L,VB,,basilar artery territory,L,,,VB,deep,VB_deep
+26,basilar_artery_territory_R,VB,,basilar artery territory,R,,,VB,deep,VB_deep
+27,superior_cerebellar_artery_territory_L,VB,,superior cerebellar artery territory,L,,,VB,cortical,VB_cortical
+28,superior_cerebellar_artery_territory_R,VB,,superior cerebellar artery territory,R,,,VB,cortical,VB_cortical
+29,inferior_cerebellar_arteries_territory_L,VB,,inferior cerebellar arteries territory,L,,,VB,cortical,VB_cortical
+30,inferior_cerebellar_arteries_territory_R,VB,,inferior cerebellar arteries territory,R,,,VB,cortical,VB_cortical
+31,lateral_ventricle_L,Ventricle,,lateral ventricle,L,CSF,,Ventricle,,Ventricle
+32,lateral_ventricle_R,Ventricle,,lateral ventricle,R,CSF,,Ventricle,,Ventricle

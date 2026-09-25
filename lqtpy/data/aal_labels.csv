@@ -25,120 +25,121 @@
 # classic limbic-lobe definition (these structures ring the corpus callosum
 # and form the limbic system) -- matches Tzourio-Mazoyer's own "Limbic Lobe"
 # group.
-LabelID,RegionName,Lobe
-1,Precentral_L,Frontal
-2,Precentral_R,Frontal
-3,Frontal_Sup_L,Frontal
-4,Frontal_Sup_R,Frontal
-5,Frontal_Sup_Orb_L,Frontal
-6,Frontal_Sup_Orb_R,Frontal
-7,Frontal_Mid_L,Frontal
-8,Frontal_Mid_R,Frontal
-9,Frontal_Mid_Orb_L,Frontal
-10,Frontal_Mid_Orb_R,Frontal
-11,Frontal_Inf_Oper_L,Frontal
-12,Frontal_Inf_Oper_R,Frontal
-13,Frontal_Inf_Tri_L,Frontal
-14,Frontal_Inf_Tri_R,Frontal
-15,Frontal_Inf_Orb_L,Frontal
-16,Frontal_Inf_Orb_R,Frontal
-17,Rolandic_Oper_L,Frontal
-18,Rolandic_Oper_R,Frontal
-19,Supp_Motor_Area_L,Frontal
-20,Supp_Motor_Area_R,Frontal
-21,Olfactory_L,Frontal
-22,Olfactory_R,Frontal
-23,Frontal_Sup_Medial_L,Frontal
-24,Frontal_Sup_Medial_R,Frontal
-25,Frontal_Med_Orb_L,Frontal
-26,Frontal_Med_Orb_R,Frontal
-27,Rectus_L,Frontal
-28,Rectus_R,Frontal
-29,Insula_L,Insula
-30,Insula_R,Insula
-31,Cingulum_Ant_L,Limbic
-32,Cingulum_Ant_R,Limbic
-33,Cingulum_Mid_L,Limbic
-34,Cingulum_Mid_R,Limbic
-35,Cingulum_Post_L,Limbic
-36,Cingulum_Post_R,Limbic
-37,Hippocampus_L,Limbic
-38,Hippocampus_R,Limbic
-39,ParaHippocampal_L,Limbic
-40,ParaHippocampal_R,Limbic
-41,Amygdala_L,Limbic
-42,Amygdala_R,Limbic
-43,Calcarine_L,Occipital
-44,Calcarine_R,Occipital
-45,Cuneus_L,Occipital
-46,Cuneus_R,Occipital
-47,Lingual_L,Occipital
-48,Lingual_R,Occipital
-49,Occipital_Sup_L,Occipital
-50,Occipital_Sup_R,Occipital
-51,Occipital_Mid_L,Occipital
-52,Occipital_Mid_R,Occipital
-53,Occipital_Inf_L,Occipital
-54,Occipital_Inf_R,Occipital
-55,Fusiform_L,Occipital
-56,Fusiform_R,Occipital
-57,Postcentral_L,Parietal
-58,Postcentral_R,Parietal
-59,Parietal_Sup_L,Parietal
-60,Parietal_Sup_R,Parietal
-61,Parietal_Inf_L,Parietal
-62,Parietal_Inf_R,Parietal
-63,SupraMarginal_L,Parietal
-64,SupraMarginal_R,Parietal
-65,Angular_L,Parietal
-66,Angular_R,Parietal
-67,Precuneus_L,Parietal
-68,Precuneus_R,Parietal
-69,Paracentral_Lobule_L,Frontal
-70,Paracentral_Lobule_R,Frontal
-71,Caudate_L,Subcortical
-72,Caudate_R,Subcortical
-73,Putamen_L,Subcortical
-74,Putamen_R,Subcortical
-75,Pallidum_L,Subcortical
-76,Pallidum_R,Subcortical
-77,Thalamus_L,Subcortical
-78,Thalamus_R,Subcortical
-79,Heschl_L,Temporal
-80,Heschl_R,Temporal
-81,Temporal_Sup_L,Temporal
-82,Temporal_Sup_R,Temporal
-83,Temporal_Pole_Sup_L,Temporal
-84,Temporal_Pole_Sup_R,Temporal
-85,Temporal_Mid_L,Temporal
-86,Temporal_Mid_R,Temporal
-87,Temporal_Pole_Mid_L,Temporal
-88,Temporal_Pole_Mid_R,Temporal
-89,Temporal_Inf_L,Temporal
-90,Temporal_Inf_R,Temporal
-91,Cerebelum_Crus1_L,Cerebellum
-92,Cerebelum_Crus1_R,Cerebellum
-93,Cerebelum_Crus2_L,Cerebellum
-94,Cerebelum_Crus2_R,Cerebellum
-95,Cerebelum_3_L,Cerebellum
-96,Cerebelum_3_R,Cerebellum
-97,Cerebelum_4_5_L,Cerebellum
-98,Cerebelum_4_5_R,Cerebellum
-99,Cerebelum_6_L,Cerebellum
-100,Cerebelum_6_R,Cerebellum
-101,Cerebelum_7b_L,Cerebellum
-102,Cerebelum_7b_R,Cerebellum
-103,Cerebelum_8_L,Cerebellum
-104,Cerebelum_8_R,Cerebellum
-105,Cerebelum_9_L,Cerebellum
-106,Cerebelum_9_R,Cerebellum
-107,Cerebelum_10_L,Cerebellum
-108,Cerebelum_10_R,Cerebellum
-109,Vermis_1_2,Cerebellum
-110,Vermis_3,Cerebellum
-111,Vermis_4_5,Cerebellum
-112,Vermis_6,Cerebellum
-113,Vermis_7,Cerebellum
-114,Vermis_8,Cerebellum
-115,Vermis_9,Cerebellum
-116,Vermis_10,Cerebellum
+# Schema v2 columns (tools/build_label_columns.py): DisplayName = readable name without hemisphere; Tissue = Cortex / Deep grey matter / Cerebellum / White matter / CSF / Brainstem / Other; Function = conservative common functional name, blank when none.
+LabelID,RegionName,Lobe,DisplayName,Tissue,Function
+1,Precentral_L,Frontal,precentral gyrus,Cortex,primary motor cortex
+2,Precentral_R,Frontal,precentral gyrus,Cortex,primary motor cortex
+3,Frontal_Sup_L,Frontal,superior frontal gyrus (dorsolateral),Cortex,
+4,Frontal_Sup_R,Frontal,superior frontal gyrus (dorsolateral),Cortex,
+5,Frontal_Sup_Orb_L,Frontal,"superior frontal gyrus, orbital part",Cortex,
+6,Frontal_Sup_Orb_R,Frontal,"superior frontal gyrus, orbital part",Cortex,
+7,Frontal_Mid_L,Frontal,middle frontal gyrus,Cortex,
+8,Frontal_Mid_R,Frontal,middle frontal gyrus,Cortex,
+9,Frontal_Mid_Orb_L,Frontal,"middle frontal gyrus, orbital part",Cortex,
+10,Frontal_Mid_Orb_R,Frontal,"middle frontal gyrus, orbital part",Cortex,
+11,Frontal_Inf_Oper_L,Frontal,"inferior frontal gyrus, opercular part",Cortex,Broca's area
+12,Frontal_Inf_Oper_R,Frontal,"inferior frontal gyrus, opercular part",Cortex,
+13,Frontal_Inf_Tri_L,Frontal,"inferior frontal gyrus, triangular part",Cortex,Broca's area
+14,Frontal_Inf_Tri_R,Frontal,"inferior frontal gyrus, triangular part",Cortex,
+15,Frontal_Inf_Orb_L,Frontal,"inferior frontal gyrus, orbital part",Cortex,
+16,Frontal_Inf_Orb_R,Frontal,"inferior frontal gyrus, orbital part",Cortex,
+17,Rolandic_Oper_L,Frontal,Rolandic operculum,Cortex,
+18,Rolandic_Oper_R,Frontal,Rolandic operculum,Cortex,
+19,Supp_Motor_Area_L,Frontal,supplementary motor area,Cortex,
+20,Supp_Motor_Area_R,Frontal,supplementary motor area,Cortex,
+21,Olfactory_L,Frontal,olfactory cortex,Cortex,
+22,Olfactory_R,Frontal,olfactory cortex,Cortex,
+23,Frontal_Sup_Medial_L,Frontal,"superior frontal gyrus, medial part",Cortex,
+24,Frontal_Sup_Medial_R,Frontal,"superior frontal gyrus, medial part",Cortex,
+25,Frontal_Med_Orb_L,Frontal,medial orbitofrontal cortex,Cortex,
+26,Frontal_Med_Orb_R,Frontal,medial orbitofrontal cortex,Cortex,
+27,Rectus_L,Frontal,gyrus rectus,Cortex,
+28,Rectus_R,Frontal,gyrus rectus,Cortex,
+29,Insula_L,Insula,insula,Cortex,
+30,Insula_R,Insula,insula,Cortex,
+31,Cingulum_Ant_L,Limbic,anterior cingulate gyrus,Cortex,
+32,Cingulum_Ant_R,Limbic,anterior cingulate gyrus,Cortex,
+33,Cingulum_Mid_L,Limbic,middle cingulate gyrus,Cortex,
+34,Cingulum_Mid_R,Limbic,middle cingulate gyrus,Cortex,
+35,Cingulum_Post_L,Limbic,posterior cingulate gyrus,Cortex,
+36,Cingulum_Post_R,Limbic,posterior cingulate gyrus,Cortex,
+37,Hippocampus_L,Limbic,hippocampus,Cortex,
+38,Hippocampus_R,Limbic,hippocampus,Cortex,
+39,ParaHippocampal_L,Limbic,parahippocampal gyrus,Cortex,
+40,ParaHippocampal_R,Limbic,parahippocampal gyrus,Cortex,
+41,Amygdala_L,Limbic,amygdala,Deep grey matter,
+42,Amygdala_R,Limbic,amygdala,Deep grey matter,
+43,Calcarine_L,Occipital,calcarine cortex,Cortex,primary visual cortex
+44,Calcarine_R,Occipital,calcarine cortex,Cortex,primary visual cortex
+45,Cuneus_L,Occipital,cuneus,Cortex,
+46,Cuneus_R,Occipital,cuneus,Cortex,
+47,Lingual_L,Occipital,lingual gyrus,Cortex,
+48,Lingual_R,Occipital,lingual gyrus,Cortex,
+49,Occipital_Sup_L,Occipital,superior occipital gyrus,Cortex,
+50,Occipital_Sup_R,Occipital,superior occipital gyrus,Cortex,
+51,Occipital_Mid_L,Occipital,middle occipital gyrus,Cortex,
+52,Occipital_Mid_R,Occipital,middle occipital gyrus,Cortex,
+53,Occipital_Inf_L,Occipital,inferior occipital gyrus,Cortex,
+54,Occipital_Inf_R,Occipital,inferior occipital gyrus,Cortex,
+55,Fusiform_L,Occipital,fusiform gyrus,Cortex,
+56,Fusiform_R,Occipital,fusiform gyrus,Cortex,
+57,Postcentral_L,Parietal,postcentral gyrus,Cortex,primary somatosensory cortex
+58,Postcentral_R,Parietal,postcentral gyrus,Cortex,primary somatosensory cortex
+59,Parietal_Sup_L,Parietal,superior parietal lobule,Cortex,
+60,Parietal_Sup_R,Parietal,superior parietal lobule,Cortex,
+61,Parietal_Inf_L,Parietal,inferior parietal lobule,Cortex,
+62,Parietal_Inf_R,Parietal,inferior parietal lobule,Cortex,
+63,SupraMarginal_L,Parietal,supramarginal gyrus,Cortex,
+64,SupraMarginal_R,Parietal,supramarginal gyrus,Cortex,
+65,Angular_L,Parietal,angular gyrus,Cortex,
+66,Angular_R,Parietal,angular gyrus,Cortex,
+67,Precuneus_L,Parietal,precuneus,Cortex,
+68,Precuneus_R,Parietal,precuneus,Cortex,
+69,Paracentral_Lobule_L,Frontal,paracentral lobule,Cortex,leg motor and sensory area
+70,Paracentral_Lobule_R,Frontal,paracentral lobule,Cortex,leg motor and sensory area
+71,Caudate_L,Subcortical,caudate nucleus,Deep grey matter,
+72,Caudate_R,Subcortical,caudate nucleus,Deep grey matter,
+73,Putamen_L,Subcortical,putamen,Deep grey matter,
+74,Putamen_R,Subcortical,putamen,Deep grey matter,
+75,Pallidum_L,Subcortical,globus pallidus,Deep grey matter,
+76,Pallidum_R,Subcortical,globus pallidus,Deep grey matter,
+77,Thalamus_L,Subcortical,thalamus,Deep grey matter,
+78,Thalamus_R,Subcortical,thalamus,Deep grey matter,
+79,Heschl_L,Temporal,Heschl's gyrus,Cortex,primary auditory cortex
+80,Heschl_R,Temporal,Heschl's gyrus,Cortex,primary auditory cortex
+81,Temporal_Sup_L,Temporal,superior temporal gyrus,Cortex,
+82,Temporal_Sup_R,Temporal,superior temporal gyrus,Cortex,
+83,Temporal_Pole_Sup_L,Temporal,temporal pole (superior part),Cortex,
+84,Temporal_Pole_Sup_R,Temporal,temporal pole (superior part),Cortex,
+85,Temporal_Mid_L,Temporal,middle temporal gyrus,Cortex,
+86,Temporal_Mid_R,Temporal,middle temporal gyrus,Cortex,
+87,Temporal_Pole_Mid_L,Temporal,temporal pole (middle part),Cortex,
+88,Temporal_Pole_Mid_R,Temporal,temporal pole (middle part),Cortex,
+89,Temporal_Inf_L,Temporal,inferior temporal gyrus,Cortex,
+90,Temporal_Inf_R,Temporal,inferior temporal gyrus,Cortex,
+91,Cerebelum_Crus1_L,Cerebellum,cerebellar crus I,Cerebellum,
+92,Cerebelum_Crus1_R,Cerebellum,cerebellar crus I,Cerebellum,
+93,Cerebelum_Crus2_L,Cerebellum,cerebellar crus II,Cerebellum,
+94,Cerebelum_Crus2_R,Cerebellum,cerebellar crus II,Cerebellum,
+95,Cerebelum_3_L,Cerebellum,cerebellar lobule III,Cerebellum,
+96,Cerebelum_3_R,Cerebellum,cerebellar lobule III,Cerebellum,
+97,Cerebelum_4_5_L,Cerebellum,cerebellar lobules IV-V,Cerebellum,
+98,Cerebelum_4_5_R,Cerebellum,cerebellar lobules IV-V,Cerebellum,
+99,Cerebelum_6_L,Cerebellum,cerebellar lobule VI,Cerebellum,
+100,Cerebelum_6_R,Cerebellum,cerebellar lobule VI,Cerebellum,
+101,Cerebelum_7b_L,Cerebellum,cerebellar lobule VIIb,Cerebellum,
+102,Cerebelum_7b_R,Cerebellum,cerebellar lobule VIIb,Cerebellum,
+103,Cerebelum_8_L,Cerebellum,cerebellar lobule VIII,Cerebellum,
+104,Cerebelum_8_R,Cerebellum,cerebellar lobule VIII,Cerebellum,
+105,Cerebelum_9_L,Cerebellum,cerebellar lobule IX,Cerebellum,
+106,Cerebelum_9_R,Cerebellum,cerebellar lobule IX,Cerebellum,
+107,Cerebelum_10_L,Cerebellum,cerebellar lobule X (flocculonodular),Cerebellum,
+108,Cerebelum_10_R,Cerebellum,cerebellar lobule X (flocculonodular),Cerebellum,
+109,Vermis_1_2,Cerebellum,"cerebellar vermis, lobules I-II",Cerebellum,
+110,Vermis_3,Cerebellum,"cerebellar vermis, lobule III",Cerebellum,
+111,Vermis_4_5,Cerebellum,"cerebellar vermis, lobules IV-V",Cerebellum,
+112,Vermis_6,Cerebellum,"cerebellar vermis, lobule VI",Cerebellum,
+113,Vermis_7,Cerebellum,"cerebellar vermis, lobule VII",Cerebellum,
+114,Vermis_8,Cerebellum,"cerebellar vermis, lobule VIII",Cerebellum,
+115,Vermis_9,Cerebellum,"cerebellar vermis, lobule IX",Cerebellum,
+116,Vermis_10,Cerebellum,"cerebellar vermis, lobule X",Cerebellum,

@@ -102,26 +102,51 @@ def _build_geometry(atlas_key: str):
     return layout
 
 
-def _fig_to_uri(fig, dpi=115):
+#: Report themes: figure background, text, region outlines, unaffected
+#: fill, and the lesion-hue magnitude ramp (low -> high damage). In dark
+#: mode the ramp runs dark -> bright so more damage reads as brighter; it is
+#: not a simple inversion of the light ramp.
+THEMES = {
+    "light": {"bg": "#ffffff", "fg": "#14181f", "edge": "#2b2f36", "na": "#d9dce1",
+              "ramp": ["#fde5d6", "#f9b890", "#f08a55", "#d9612b", "#a8431a", "#72290d"]},
+    "dark": {"bg": "#161a21", "fg": "#e8ebf0", "edge": "#0b0d11", "na": "#3a414c",
+             "ramp": ["#5a2c17", "#8a3d1c", "#c25224", "#eb6d35", "#f89a65", "#ffc9a3"]},
+}
+
+
+def lesion_cmap(theme: str = "light"):
+    """The report's lesion-hue magnitude colormap for ``theme``."""
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list(f"lqtpy_lesion_{theme}", THEMES[theme]["ramp"])
+
+
+def _fig_to_uri(fig, dpi=115, facecolor="white"):
     import matplotlib.pyplot as plt
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight",
-                facecolor="white")
+                facecolor=facecolor)
     plt.close(fig)
     buf.seek(0)
     return "data:image/png;base64," + base64.b64encode(buf.read()).decode("ascii")
 
 
 def flat_map_png(atlas_key: str, damage_by_region: dict, title="",
-                 cmap="Reds", na_color="#b8bcc2", edgecolor="black",
-                 lw=1.2, vmax=None, ylabel="Percent damage (%)") -> str | None:
+                 cmap=None, na_color=None, edgecolor=None,
+                 lw=1.2, vmax=None, ylabel="Percent damaged (%)",
+                 theme: str = "light") -> str | None:
     """Render a labeled 2x4 (hemisphere x view) ggseg flat-brain damage map.
 
     ``damage_by_region`` maps region keys (see ``_KEY_FN`` per atlas) -> value.
+    ``theme`` ("light"/"dark") sets background, text, outlines and the
+    lesion-hue ramp; explicit ``cmap``/``na_color``/``edgecolor`` override it.
     Returns a base64 ``data:`` PNG URI, or None if geometry is unavailable or
     rendering fails.
     """
+    t = THEMES[theme]
+    cmap = cmap or lesion_cmap(theme)
+    na_color = na_color or t["na"]
+    edgecolor = edgecolor or t["edge"]
     path = os.path.join(_DATA_DIR, f"ggseg_{atlas_key}.csv.gz")
     if not os.path.exists(path):
         return None
@@ -138,6 +163,8 @@ def flat_map_png(atlas_key: str, damage_by_region: dict, title="",
         sm = cm.ScalarMappable(norm=norm, cmap=cmap)
 
         fig, ax = plt.subplots(figsize=(11, 5.5))
+        fig.set_facecolor(t["bg"])
+        ax.set_facecolor(t["bg"])
         patches, colors = [], []
         for key, xy in layout["polys"]:
             patches.append(Polygon(xy, closed=True))
@@ -153,33 +180,32 @@ def flat_map_png(atlas_key: str, damage_by_region: dict, title="",
         ax.set_ylim(y0 - pad, y1 + pad * 1.4)
         ax.set_aspect("equal")
         ax.set_xticks([layout["col_centers"][v] for v in _VIEWS])
-        ax.set_xticklabels(_VIEWS, fontsize=10)
+        ax.set_xticklabels(_VIEWS, fontsize=10, color=t["fg"])
         ax.set_yticks([layout["row_centers"][h] for h in _ROWS])
-        ax.set_yticklabels(_ROWS, fontsize=10)
+        ax.set_yticklabels(_ROWS, fontsize=10, color=t["fg"])
         ax.tick_params(length=0)
         for spine in ax.spines.values():
             spine.set_visible(False)
-        ax.set_xlabel("side", fontsize=11)
-        ax.set_ylabel("hemisphere", fontsize=11)
+        ax.set_xlabel("side", fontsize=11, color=t["fg"])
+        ax.set_ylabel("hemisphere", fontsize=11, color=t["fg"])
         if title:
-            ax.set_title(title, fontsize=13, color="black", pad=10)
+            ax.set_title(title, fontsize=13, color=t["fg"], pad=10)
 
         cb = fig.colorbar(sm, ax=ax, fraction=0.025, pad=0.03)
-        cb.set_label(ylabel, fontsize=9)
-        cb.ax.tick_params(labelsize=8)
-        fig.set_facecolor("white")
-        return _fig_to_uri(fig)
+        cb.set_label(ylabel, fontsize=9, color=t["fg"])
+        cb.ax.tick_params(labelsize=8, colors=t["fg"])
+        cb.outline.set_edgecolor(t["fg"])
+        return _fig_to_uri(fig, facecolor=t["bg"])
     except Exception as exc:
         warnings.warn(f"{atlas_key} flat plot failed: {exc}")
         plt.close("all")
         return None
 
 
-def dk_flat_png(damage_by_region: dict, title="Desikan-Killiany cortical atlas",
+def dk_flat_png(damage_by_region: dict, title="",
                 **kw) -> str | None:
     return flat_map_png("dk", damage_by_region, title=title, **kw)
 
 
-def schaefer_flat_png(damage_by_region: dict,
-                      title="Schaefer-100 cortical atlas", **kw) -> str | None:
+def schaefer_flat_png(damage_by_region: dict, title="", **kw) -> str | None:
     return flat_map_png("schaefer100", damage_by_region, title=title, **kw)
