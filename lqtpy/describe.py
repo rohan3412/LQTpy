@@ -32,6 +32,7 @@ import nibabel as nib
 from .atlases import load_atlas
 from .overlap import coverage as _coverage
 from .overlap import region_overlap_from_mask
+from . import _format as _fmt
 from .prepared import prepare
 
 __all__ = ["facts", "describe", "Description", "PROFILES"]
@@ -116,14 +117,7 @@ def emphasis_html(text: str) -> str:
 # Facts
 # --------------------------------------------------------------------------- #
 def _vol_text(mm3: float) -> str:
-    cc = mm3 / 1000.0
-    if cc >= 10:
-        return f"{cc:.0f} cm³"
-    if cc >= 1:
-        return f"{cc:.1f} cm³"
-    if cc >= 0.1:
-        return f"{cc:.2f} cm³"
-    return f"{mm3:.0f} mm³"
+    return _fmt.volume(mm3)
 
 
 def _hemi_word(h):
@@ -208,7 +202,8 @@ def _hierarchy(mask, atlas, lesion_total: int, grid_affine, wm=None) -> dict:
 
 def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "stroke",
           qc_flags=None, shape: bool = False, networks: bool = True,
-          white_matter: "str | None" = "jhu", territories: "str | None" = "arterial") -> dict:
+          white_matter: "str | None" = "jhu", territories: "str | None" = "arterial",
+          tissue: bool = True) -> dict:
     """Structured facts for a description (see module docstring).
 
     ``atlas`` is the anatomical atlas for the hemisphere/lobe/region
@@ -217,7 +212,9 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
     ``networks`` adds the Yeo-7 network involvement from ``schaefer``.
     ``white_matter`` names the white-matter atlas used for the part the main
     atlas doesn't label (``None`` to skip); ``territories`` the vascular
-    territory atlas (``None`` to skip).
+    territory atlas (``None`` to skip). ``tissue`` adds tissue composition
+    and a location class per part (periventricular, juxtacortical, ...; see
+    :mod:`lqtpy.tissue`).
     """
     from . import qc as _qc
     from .morphometry import compute_morphometry
@@ -248,6 +245,15 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
         "qc": [f.to_dict() if hasattr(f, "to_dict") else dict(f) for f in flags],
     }
 
+    loc = None
+    if tissue:
+        from . import tissue as _tissue
+        loc = _tissue.locate(p)
+        out["tissue"] = {k: loc[k] for k in ("composition", "class", "counts", "contact_mm")}
+        ut = _unlabelled_tissue(gm.mask, at, wm_at, by_side=True)
+        out["unlabelled_tissue"] = ut.get("all", {})
+        out["unlabelled_tissue_by_side"] = {k: v for k, v in ut.items() if k != "all"}
+
     # Clusters (gap-aware).
     cl = _qc.clusters(p)
     sizes = cl["sizes"]
@@ -263,6 +269,13 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
                  "share": round(share, 1), "described": False,
                  "center_mm": [round(float(v), 1) for v in cw],
                  "hemisphere": "left" if cw[0] < -1 else ("right" if cw[0] > 1 else "midline")}
+        if loc is not None and i < len(loc["parts"]):
+            lp = loc["parts"][i]
+            entry.update({"location": lp["class"], "tissue_class": lp["tissue_class"],
+                          "tissue": lp["composition"],
+                          "dist_ventricle_mm": lp["dist_ventricle_mm"],
+                          "dist_cortex_mm": lp["dist_cortex_mm"],
+                          "max_axial_mm": lp["max_axial_mm"]})
         if i < prof.max_clusters and (share >= prof.min_cluster_share or i == 0) and len(sizes) > 1:
             cmask = np.zeros(p.shape, bool)
             sub = cl["labels"] == i + 1
@@ -319,10 +332,46 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
     return out
 
 
-_TERRITORY_NAME = {"ACA": "anterior cerebral artery (ACA)",
-                   "MCA": "middle cerebral artery (MCA)",
-                   "PCA": "posterior cerebral artery (PCA)",
-                   "VB": "vertebrobasilar"}
+def _unlabelled_tissue(mask, atlas, wm_atlas, by_side: bool = False) -> dict:
+    """Tissue classes of the lesion voxels neither ``atlas`` nor the
+    white-matter atlas names, as % of the lesion (on ``atlas``'s grid).
+    ``by_side``: ``{"all": {...}, "left": {...}, "right": {...}, "midline":
+    {...}}`` instead (each still a share of the whole lesion)."""
+    from . import tissue as _tissue
+    from .atlases import load_atlas as _load
+    ts = _load("tissue")
+    grid = np.asarray(atlas.img.affine, float)
+    lab = atlas.label_array()
+    if ts.label_array().shape != lab.shape or not np.allclose(
+            np.asarray(ts.img.affine, float), grid, atol=1e-3):
+        return {}
+    total = int(np.count_nonzero(mask))
+    if not total:
+        return {}
+    lab_m = lab[mask]
+    known = np.isin(lab_m, list(atlas.labels)) & (lab_m > 0)
+    if wm_atlas is not None and wm_atlas.label_array().shape == lab.shape:
+        wl = wm_atlas.label_array()[mask]
+        known |= np.isin(wl, list(wm_atlas.labels)) & (wl > 0)
+    if known.all():
+        return {} if not by_side else {"all": {}}
+    cls = _tissue._LUT[ts.label_array()[mask][~known]]
+    counts = np.bincount(cls, minlength=len(_tissue._KEYS))
+    whole = {k: round(100.0 * int(c) / total, 1) for k, c in zip(_tissue._KEYS, counts) if c}
+    if not by_side:
+        return whole
+    out = {"all": whole}
+    x = np.argwhere(mask)[~known] @ grid[0, :3] + grid[0, 3]
+    for side, sel in (("left", x < -1e-3), ("right", x > 1e-3), ("midline", np.abs(x) <= 1e-3)):
+        if sel.any():
+            c = np.bincount(cls[sel], minlength=len(_tissue._KEYS))
+            out[side] = {k: round(100.0 * int(v) / total, 1) for k, v in zip(_tissue._KEYS, c) if v}
+    return out
+
+
+#: Both halves of one territory hold at least this share of the lesion: it is
+#: reported as one bilateral territory.
+BILATERAL_TERRITORY_MIN = 0.2
 _DEEP_WORDS = ("lenticulostriate", "thalamoperforator", "basilar")
 
 
@@ -346,9 +395,25 @@ def _territories(p, key: str) -> "list[dict]":
         g["parts"].append({"name": name, "deep": any(w in name for w in _DEEP_WORDS),
                            "pct_of_lesion": round(100.0 * r["LesionVoxels"] / total, 1),
                            "pct_damaged": r["PercentDamage"]})
+    # A lesion straddling the midline inside one territory (a pontine lesion in
+    # the basilar territory, bilateral ACA) is one bilateral territory, not a
+    # "left" one with a "right" remainder.
+    for terr in {t for _, t in groups}:
+        lft, rgt = groups.get(("L", terr)), groups.get(("R", terr))
+        if (lft and rgt and min(lft["voxels"], rgt["voxels"]) >= BILATERAL_TERRITORY_MIN * total):
+            merged = {"voxels": lft["voxels"] + rgt["voxels"], "parts": []}
+            by_name: "dict[str, dict]" = {}
+            for pp in lft["parts"] + rgt["parts"]:
+                q = by_name.setdefault(pp["name"], {**pp, "pct_of_lesion": 0.0})
+                q["pct_of_lesion"] = round(q["pct_of_lesion"] + pp["pct_of_lesion"], 1)
+                q["pct_damaged"] = max(q["pct_damaged"], pp["pct_damaged"])
+            merged["parts"] = list(by_name.values())
+            del groups[("L", terr)], groups[("R", terr)]
+            groups[("bilateral", terr)] = merged
     out = []
     for (hemi, terr), g in groups.items():
-        out.append({"hemisphere": _hemi_word(hemi), "territory": terr,
+        out.append({"hemisphere": "bilateral" if hemi == "bilateral" else _hemi_word(hemi),
+                    "territory": terr,
                     "pct_of_lesion": round(100.0 * g["voxels"] / total, 1),
                     "parts": sorted(g["parts"], key=lambda d: -d["pct_of_lesion"])})
     return sorted(out, key=lambda d: -d["pct_of_lesion"])
@@ -373,8 +438,7 @@ def _territory_sentence(terrs: "list[dict]", subject: str = "It") -> str:
     main = [t for t in terrs if t["pct_of_lesion"] >= 5][:3]
     out = []
     for i, t in enumerate(main):
-        side = f"{t['hemisphere']} " if t["hemisphere"] in ("left", "right") else ""
-        name = f"the {side}{_TERRITORY_NAME.get(t['territory'], t['territory'])} territory"
+        name = _fmt.territory_long(t["hemisphere"], t["territory"])
         verb = "lies" if subject == "It" else "lie"
         head = f"{name} ({_pct(t['pct_of_lesion'])})"
         sent = (f"{subject} {verb} in {_b(head)}" if i == 0
@@ -409,14 +473,8 @@ def _territory_sentence(terrs: "list[dict]", subject: str = "It") -> str:
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
-_LOBE_WORD = {"Frontal": "frontal lobe", "Parietal": "parietal lobe", "Temporal": "temporal lobe",
-              "Occipital": "occipital lobe", "Insula": "insula", "Limbic": "limbic lobe",
-              "Subcortical": "deep grey nuclei", "Cerebellum": "cerebellum",
-              "Brainstem": "brainstem", "Ventricle": "ventricles"}
-
-
 def _lobe_word(lobe: str) -> str:
-    return _LOBE_WORD.get(lobe, lobe.lower())
+    return _fmt.lobe_word(lobe)
 
 
 def _join(items: "list[str]") -> str:
@@ -447,7 +505,7 @@ def _named_regions(lobe: dict, prof: Profile) -> "list[dict]":
 
 
 def _where_sentence(hemis: "list[dict]", prof: Profile, subject: str, atlas_label: str,
-                    regions: bool = True) -> "list[str]":
+                    regions: bool = True, unl_tissue: "dict | None" = None) -> "list[str]":
     """Lobes per hemisphere in one sentence, then the unlabelled share,
     then (optionally) one sentence of named regions per lobe."""
     main = [h for h in hemis if h["pct_of_lesion"] >= 1]
@@ -492,7 +550,9 @@ def _where_sentence(hemis: "list[dict]", prof: Profile, subject: str, atlas_labe
     if wm_clauses:
         sentences.append(f"{subject} also involves " + "; and ".join(wm_clauses) + ".")
     unl = sum(h.get("unlabelled_pct", 0.0) for h in hemis)
-    if unl >= 1:
+    if unl >= 1 and unl_tissue:
+        sentences.append(_unlabelled_sentence(unl, unl_tissue))
+    elif unl >= 1:
         share = "Most" if unl >= 60 else ("About half" if 40 <= unl < 60 else None)
         tail = ("lies in tissue no bundled atlas names (unnamed white matter, CSF or the brain edge)."
                 if any(h.get("wm") is not None and "wm_pct" in h for h in hemis)
@@ -512,16 +572,121 @@ def _where_sentence(hemis: "list[dict]", prof: Profile, subject: str, atlas_labe
     return sentences
 
 
+_UNL_WORDS = (("white_matter", "in unnamed white matter"), ("csf", "in CSF spaces"),
+              ("outside", "outside the brain"))
+
+
+def _unlabelled_sentence(unl: float, ut: dict, whole: str = "it") -> str:
+    """'17% of it lies outside the named structures: 12% in unnamed white
+    matter and 3% in CSF spaces.'"""
+    share = "Most" if unl >= 60 else ("About half" if 40 <= unl < 60 else None)
+    head = (f"{share} of {whole} ({_pct(unl)})" if share else f"{_pct(unl)} of {whole}")
+    items = [(w, ut.get(k, 0.0)) for k, w in _UNL_WORDS if ut.get(k, 0.0) >= 1]
+    # The rest is almost all cortex: the template's cortical ribbon is wider
+    # than the DKT regions (its outer edge in particular).
+    rest = sum(v for k, v in ut.items() if k not in ("white_matter", "csf", "outside"))
+    if rest >= 1:
+        items.append(("in cortex just outside the named regions", rest))
+    items.sort(key=lambda t: -t[1])
+    if not items:
+        return f"{head} lies at the edges of named structures."
+    return (f"{head} lies outside the named structures: "
+            + _join([f"{_pct(v)} {w}" for w, v in items]) + ".")
+
+
+_TISSUE_ORDER = ("cortex", "white_matter", "deep_grey", "cerebellum", "brainstem",
+                 "ventricles", "csf", "outside")
+_LOC_PHRASE = {"infratentorial": "infratentorial", "cortical": "cortical",
+               "deep grey matter": "in deep grey matter", "periventricular": "periventricular",
+               "juxtacortical": "juxtacortical", "deep white matter": "in deep white matter",
+               "outside the brain": "outside the brain"}
+
+
+def _tissue_list(comp: dict, min_pct: float = 2.0) -> str:
+    from .tissue import TISSUE_WORDS
+    items = [(k, comp.get(k, 0.0)) for k in _TISSUE_ORDER if comp.get(k, 0.0) >= min_pct]
+    items.sort(key=lambda t: -t[1])
+    return _join([f"{TISSUE_WORDS[k]} ({_pct(v)})" for k, v in items])
+
+
+#: "Lacunar-sized": one subcortical part at most this wide across an axial
+#: plane (the STRIVE recent small subcortical infarct limit) ...
+LACUNAR_MAX_AXIAL_MM = 20.0
+#: ... and at most this volume. Width alone let a 3.5 cm³ lesion that is
+#: 19 mm across but tall through: a 20 mm sphere is 4.2 cm³, a typical
+#: lacune well under 1.5 cm³.
+LACUNAR_MAX_MM3 = 1500.0
+
+
+def _tissue_sentence(f: dict, prof: Profile) -> str:
+    """'By tissue it is **cortico-subcortical**: cortex (53%), white matter
+    (35%) and deep grey matter (9%).' A single small subcortical lesion is
+    called lacunar-sized (at most 20 mm across and 1.5 cm³); a single lesion reaching the
+    ventricle or cortex is called periventricular / juxtacortical."""
+    t = f.get("tissue") or {}
+    cls = t.get("class")
+    if not cls:
+        return ""
+    lst = _tissue_list(t["composition"])
+    n = f["n_clusters"]
+    first = f["clusters"][0] if f.get("clusters") else {}
+    what = _b(cls)
+    if (cls == "subcortical" and n <= 1 and prof.name == "stroke"
+            and first.get("max_axial_mm", 99) <= LACUNAR_MAX_AXIAL_MM
+            and f["volume_mm3"] <= LACUNAR_MAX_MM3):
+        what = (f"a {_b('small subcortical lesion')} ({first['max_axial_mm']:.0f} mm across, "
+                "lacunar-sized)")
+    sent = f"By tissue it is {what}" + (f": {lst}." if lst else ".")
+    if n <= 1 and first.get("location") in ("periventricular", "juxtacortical"):
+        where = "the lateral ventricle" if first["location"] == "periventricular" else "the cortex"
+        sent += f" It reaches {where} ({first['location']})."
+    return sent
+
+
+def _count_words(counts: dict) -> str:
+    """'**12 periventricular**, 5 cortical or juxtacortical and 4 in deep
+    white matter'."""
+    merged = dict(counts)
+    cj = merged.pop("cortical", 0) + merged.pop("juxtacortical", 0)
+    items = [(v, _LOC_PHRASE[k]) for k, v in merged.items() if v]
+    if cj:
+        items.append((cj, "cortical or juxtacortical"))
+    items.sort(key=lambda t: -t[0])
+    words = [f"{v} {w}" for v, w in items]
+    if words:
+        words[0] = _b(words[0])
+    return _join(words)
+
+
+def _midline_structures(f: dict) -> "tuple[float, str | None]":
+    """Share of the lesion in structures the atlas puts on the midline
+    (brainstem, vermis, ...), and the largest one's name."""
+    for h in f.get("hemispheres", []):
+        if h.get("code") == "Midline":
+            top = h["lobes"][0]["lobe"] if h["lobes"] else None
+            return h["pct_of_lesion"], (_lobe_word(top) if top else None)
+    return 0.0, None
+
+
 def _side_summary(f: dict) -> str:
-    pl, pr = f["pct_left"], f["pct_right"]
+    """Where the lesion sits across the hemispheres. The share on the
+    midline plane is never dropped: 40% left + 40% right says so when the
+    other 20% is on the midline."""
+    pl, pr, pm = f["pct_left"], f["pct_right"], f.get("pct_midline", 0.0)
+    mid_share, mid_name = _midline_structures(f)
+    split = f"{_pct(pl)} left, {_pct(pr)} right" + (f", {_pct(pm)} on the midline" if pm >= 1 else "")
+    if mid_share >= 50:
+        where = f"on the midline ({mid_name})" if mid_name else "on the midline"
+        return f"{where}, {split}"
     if pl >= 95:
         return "in the left hemisphere"
     if pr >= 95:
         return "in the right hemisphere"
     if max(pl, pr) >= 75:
         main, other, op = ("left", "right", pr) if pl > pr else ("right", "left", pl)
-        return f"mainly in the {main} hemisphere, crossing the midline ({_pct(op)} {other})"
-    return f"in both hemispheres ({_pct(pl)} left, {_pct(pr)} right)"
+        tail = f"{_pct(op)} {other}" + (f", {_pct(pm)} on the midline" if pm >= 1 else "")
+        return f"mainly in the {main} hemisphere, crossing the midline ({tail})"
+    return f"in both hemispheres ({split})"
 
 
 def _caveats(f: dict) -> str:
@@ -554,6 +719,8 @@ def _render(f: dict) -> "list[tuple[str, str]]":
         split = f" ({nl} left, {nr} right" + (f", {nm} midline" if nm else "") + ")"
         head = (f"{_b(f'{n} separate lesions')}{split} totalling {_b(vol)}. "
                 f"The largest is {_vol_text(sizes[0])}; the median is {_vol_text(med)}.")
+        if f.get("tissue") and any(f["tissue"]["counts"].values()):
+            head += f" By location: {_count_words(f['tissue']['counts'])}."
         sections.append(("Summary", head))
         dist = []
         for h in f["hemispheres"]:
@@ -573,7 +740,9 @@ def _render(f: dict) -> "list[tuple[str, str]]":
             top = [k for k, v in sorted(wm_names.items(), key=lambda kv: -kv[1]) if v >= 5][:3]
             txt += (f" {_pct(wm_total)} of the total volume is in named white matter"
                     + (f", mainly the {_join(top)}" if top else "") + ".")
-        if unl >= 1:
+        if unl >= 1 and f.get("unlabelled_tissue"):
+            txt += " " + _unlabelled_sentence(unl, f["unlabelled_tissue"], "the total volume")
+        elif unl >= 1:
             txt += f" {_pct(unl)} lies in tissue no bundled atlas names."
         if txt:
             sections.append(("Distribution", txt.strip()))
@@ -581,7 +750,8 @@ def _render(f: dict) -> "list[tuple[str, str]]":
             parts = []
             for c in described:
                 where = _cluster_where(c)
-                parts.append(f"Lesion {c['id']} ({_vol_text(c['volume_mm3'])}) {where}.")
+                loc = f", {c['location']}" if c.get("location") else ""
+                parts.append(f"Lesion {c['id']} ({_vol_text(c['volume_mm3'])}{loc}) {where}.")
             sections.append(("Largest lesions", " ".join(parts)))
     else:
         if n <= 1:
@@ -593,9 +763,13 @@ def _render(f: dict) -> "list[tuple[str, str]]":
                        " as one part.")
         sections.append(("Summary", opener))
         where = _where_sentence(f["hemispheres"], prof, "It" if n <= 1 else "Overall it",
-                                atlas_label, regions=n <= 1)
+                                atlas_label, regions=n <= 1,
+                                unl_tissue=f.get("unlabelled_tissue"))
         if where:
             sections.append(("Location", " ".join(where)))
+        ts = _tissue_sentence(f, prof)
+        if ts:
+            sections.append(("Tissue", ts))
         if prof.name == "tumour":
             extra = []
             vent = [lb for h in f["hemispheres"] for lb in h["lobes"] if lb["lobe"] == "Ventricle"]
@@ -608,7 +782,15 @@ def _render(f: dict) -> "list[tuple[str, str]]":
             for c in f["clusters"]:
                 if not c.get("described"):
                     continue
-                txt = f"Part {c['id']} ({_vol_text(c['volume_mm3'])}, {_pct(c['share'])} of the lesion) {_cluster_where(c)}."
+                txt = (f"Part {c['id']} ({_vol_text(c['volume_mm3'])}, {_pct(c['share'])} of the "
+                       f"lesion) {_cluster_where(c)}")
+                # Stroke/tumour parts: cortical/subcortical; other profiles: the
+                # MS-style location class (periventricular, juxtacortical, ...).
+                if prof.name in ("stroke", "tumour") and c.get("tissue_class"):
+                    txt += f"; it is {c['tissue_class']}"
+                elif c.get("location"):
+                    txt += f"; it is {_LOC_PHRASE[c['location']]}"
+                txt += "."
                 blocked = any(q["id"] in _SHAPE_BLOCKERS and q["severity"] != "info"
                               for q in f["qc"])
                 if c.get("shape") and not blocked:
@@ -697,18 +879,21 @@ def _shape_predicate(c: dict) -> str:
 
 def describe(lesion, *, profile: str = "stroke", atlas: str = "dk", threshold: float = 0.5,
              qc_flags=None, shape: bool = False, networks: bool = True,
-             white_matter: "str | None" = "jhu", territories: "str | None" = "arterial") -> Description:
+             white_matter: "str | None" = "jhu", territories: "str | None" = "arterial",
+             tissue: bool = True) -> Description:
     """A plain-language description of a lesion.
 
     ``profile``: ``stroke`` (default), ``small_vessel``, ``tumour`` or
     ``research`` -- see the module docstring. ``shape=True`` adds shape
-    descriptors (extra tier). Returns a :class:`Description` whose ``text``
+    descriptors (extra tier); ``tissue=False`` drops the tissue composition
+    and location classes. Returns a :class:`Description` whose ``text``
     is ready to show and whose ``facts`` hold every number behind it.
     """
     if profile not in PROFILES:
         raise ValueError(f"unknown profile {profile!r}; choose from {sorted(PROFILES)}")
     f = facts(lesion, atlas=atlas, threshold=threshold, profile=profile, qc_flags=qc_flags,
-              shape=shape, networks=networks, white_matter=white_matter, territories=territories)
+              shape=shape, networks=networks, white_matter=white_matter, territories=territories,
+              tissue=tissue)
     marked = _render(f)
     sections = [(h, strip_emphasis(p)) for h, p in marked]
     text = "\n\n".join(p for _, p in sections)

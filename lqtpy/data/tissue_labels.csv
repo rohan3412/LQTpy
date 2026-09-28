@@ -1,0 +1,16 @@
+# Tissue classes on the FSL MNI152 1 mm grid, built by tools/build_tissue_map.py from the DKT31/CMA atlas and the ICBM 2009a white-matter probability map.
+LabelID,RegionName,Group,Lobe,DisplayName,Hemisphere,Tissue,Function,Territory
+1,cortex_L,Cortex,,cerebral cortex,L,Cortex,,
+2,cortex_R,Cortex,,cerebral cortex,R,Cortex,,
+3,white_matter_L,White matter,,cerebral white matter,L,White matter,,
+4,white_matter_R,White matter,,cerebral white matter,R,White matter,,
+5,deep_grey_L,Deep grey matter,,deep grey matter,L,Deep grey matter,,
+6,deep_grey_R,Deep grey matter,,deep grey matter,R,Deep grey matter,,
+7,lateral_ventricle_L,CSF,,lateral ventricle,L,CSF,,
+8,lateral_ventricle_R,CSF,,lateral ventricle,R,CSF,,
+9,ventricles_3rd_4th,CSF,,third and fourth ventricles,Midline,CSF,,
+10,cerebellum_L,Cerebellum,,cerebellum,L,Cerebellum,,
+11,cerebellum_R,Cerebellum,,cerebellum,R,Cerebellum,,
+12,brainstem,Brainstem,,brainstem,Midline,Brainstem,,
+13,csf_L,CSF,,sulcal and cisternal CSF,L,CSF,,
+14,csf_R,CSF,,sulcal and cisternal CSF,R,CSF,,

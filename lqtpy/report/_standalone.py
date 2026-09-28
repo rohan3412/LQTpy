@@ -30,6 +30,7 @@ from __future__ import annotations
 import datetime
 import html
 
+from .. import _format as fmt
 from .style import DEFAULT_STYLE, ReportStyle
 
 __all__ = ["render_single", "render_group"]
@@ -126,7 +127,7 @@ html[data-view="clinical"] .view-clin { display:block; }
 .pill { display:inline-flex; align-items:center; gap:6px; padding:2px 10px; border-radius:999px;
   font-size:12px; font-weight:600; border:1px solid var(--line-2); color:var(--ink-2); }
 .pill.extra { color:var(--extra); border-color:var(--extra); background:var(--extra-soft); }
-.kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }
+.kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(146px,1fr)); gap:12px; }
 .kpi { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
 .kpi .k { font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); }
 .kpi .v { font-size:22px; font-weight:650; margin-top:2px; line-height:1.2; }
@@ -142,6 +143,7 @@ html[data-view="clinical"] .view-clin { display:block; }
 .desc p strong { color:var(--ink); font-weight:650; }
 .desc .h { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-3); margin-bottom:1px; }
 .plate { background:#000; border-radius:10px; overflow:hidden; }
+.plate.light { background:#fff; border:1px solid var(--line); }
 .plate img { display:block; width:100%; height:auto; }
 figure { margin:0; }
 figcaption { font-size:12px; color:var(--ink-3); margin-top:6px; }
@@ -193,6 +195,15 @@ th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); 
 th { font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-3); font-weight:650; }
 td .track { width:120px; display:inline-block; vertical-align:middle; margin-left:8px; }
 .tablewrap { overflow-x:auto; }
+th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+th.sortable:hover { color:var(--ink); }
+th.sortable::after { content:"\2195"; margin-left:4px; opacity:.35; font-size:10px; }
+th.sortable[aria-sort="ascending"]::after { content:"\25B2"; opacity:.9; }
+th.sortable[aria-sort="descending"]::after { content:"\25BC"; opacity:.9; }
+.tablewrap.scroll { max-height:min(60vh, 560px); overflow:auto; }
+.tablewrap.scroll thead th { position:sticky; top:0; background:var(--panel); z-index:1;
+  box-shadow:inset 0 -1px 0 var(--line); }
+.card .count { font-weight:500; color:var(--ink-3); text-transform:none; letter-spacing:0; margin-left:6px; }
 .theme-img.dark-img { display:block; } .theme-img.light-img { display:none; }
 :root[data-theme="light"] .theme-img.dark-img { display:none; }
 :root[data-theme="light"] .theme-img.light-img { display:block; }
@@ -235,7 +246,7 @@ html[data-view="clinical"] body { background:#e9ebee; }
 .doc .ok { font:9.5pt var(--sans); color:#0b6b0b; }
 .doc figure { break-inside:avoid; margin:3mm 0 4mm; }
 .doc img { display:block; max-width:100%; height:auto; }
-.doc .plate { max-width:150mm; }
+.doc .plate { max-width:150mm; background:#fff; border:1px solid #d9dde2; }
 .doc figure .plate { border-radius:2mm; }
 .doc figcaption { font:8.5pt/1.4 var(--sans); color:#5b6370; }
 .doc .extra-tag { font:700 7.5pt var(--sans); letter-spacing:.06em; color:#4a3aa7; border:1px solid #4a3aa7;
@@ -251,6 +262,7 @@ html[data-view="clinical"] body { background:#e9ebee; }
   .bar, .view-dash { display:none !important; }
   .view-clin { display:block !important; }
   .doc { box-shadow:none; margin:0; padding:0; max-width:none; }
+  th.sortable::after { content:none !important; }
   a { color:inherit; text-decoration:none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
@@ -289,6 +301,48 @@ _JS = r"""
   if (tb) tb.addEventListener("click", function () {
     setTheme(root.getAttribute("data-theme") === "dark" ? "light" : "dark");
   });
+  // Sortable tables: click a header to sort by that column; click again to
+  // reverse. Cells may carry data-sort to sort by something other than
+  // their text. Numbers ("7.2", "45%", "1,234", "<1%") sort numerically.
+  function key(td) {
+    if (!td) return "";
+    var v = td.hasAttribute("data-sort") ? td.getAttribute("data-sort") : td.textContent.trim();
+    var m = v.replace(/,/g, "").match(/^[<>~]?\s*(-?\d+(\.\d+)?)/);
+    return m ? parseFloat(m[1]) : v.toLowerCase();
+  }
+  document.querySelectorAll("table").forEach(function (table) {
+    var head = table.tHead, body = table.tBodies[0];
+    if (!head || !body || body.rows.length < 2) return;
+    var ths = head.rows[0].cells;
+    Array.prototype.forEach.call(ths, function (th, col) {
+      th.classList.add("sortable");
+      th.setAttribute("tabindex", "0");
+      th.setAttribute("title", "Sort by this column");
+      function sort() {
+        var cur = th.getAttribute("aria-sort");
+        var rows = Array.prototype.slice.call(body.rows);
+        var numeric = rows.every(function (r) {
+          var k = key(r.cells[col]); return typeof k === "number" || k === "" || k === "\u2014";
+        });
+        var dir = cur ? (cur === "ascending" ? "descending" : "ascending")
+                      : (numeric ? "descending" : "ascending");
+        rows.sort(function (a, b) {
+          var x = key(a.cells[col]), y = key(b.cells[col]);
+          var xn = typeof x === "number", yn = typeof y === "number";
+          var c = xn && yn ? x - y : xn ? -1 : yn ? 1 : String(x).localeCompare(String(y));
+          if (xn !== yn) return c;  // blanks last in both directions
+          return dir === "ascending" ? c : -c;
+        });
+        rows.forEach(function (r) { body.appendChild(r); });
+        Array.prototype.forEach.call(ths, function (o) { o.removeAttribute("aria-sort"); });
+        th.setAttribute("aria-sort", dir);
+      }
+      th.addEventListener("click", sort);
+      th.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sort(); }
+      });
+    });
+  });
   var pb = document.getElementById("pdf-btn");
   if (pb) pb.addEventListener("click", function () { window.print(); });
 })();
@@ -320,8 +374,6 @@ def _page(title: str, dash: str, clin: str, *, subtitle: str = "") -> str:
 # Shared pieces
 # =========================================================================== #
 _KIND = {"single": "Single lesion", "group": "Group", "group-member": "Single lesion (from a group)"}
-_TERR = {"ACA": "anterior cerebral artery", "MCA": "middle cerebral artery",
-         "PCA": "posterior cerebral artery", "VB": "vertebrobasilar"}
 _SHORT = {"aal": "AAL", "schaefer": "Schaefer", "dk": "DKT", "jhu": "JHU", "arterial": "Arterial"}
 
 
@@ -330,8 +382,9 @@ def _bar(value, cls="", max_value=100.0) -> str:
     return f'<span class="track {cls}" aria-hidden="true"><i style="width:{w:.1f}%"></i></span>'
 
 
-def _row(name, value, cls, extra="", max_value=100.0, digits=0) -> str:
-    return (f'<div class="row"><span class="name" title="{_esc(name)}">{_esc(name)}{extra}</span>'
+def _row(name, value, cls, extra="", max_value=100.0, digits=0, title=None, key=None) -> str:
+    k = f' data-key="{_esc(key)}"' if key else ""
+    return (f'<div class="row"{k}><span class="name" title="{_esc(title or name)}">{_esc(name)}{extra}</span>'
             f'{_bar(value, cls, max_value)}<span class="num">{_pct(value, digits)}</span></div>')
 
 
@@ -358,7 +411,7 @@ def _flags_html(flags) -> str:
     out = []
     for f in items:
         icon = {"error": "×", "warn": "!", "info": "i"}[f["severity"]]
-        word = {"error": "Problem", "warn": "Check", "info": "Note"}[f["severity"]]
+        word = fmt.quality_label(f["severity"])
         sug = f'<div class="sug">{_esc(f["suggestion"])}</div>' if f.get("suggestion") else ""
         out.append(f'<div class="flag {f["severity"]}"><span class="ic" aria-hidden="true">{icon}</span>'
                    f'<div><b>{word}</b>{_esc(f["message"])}{sug}</div></div>')
@@ -403,6 +456,19 @@ def _img(uri, alt, id_=None) -> str:
     return f'<img{idattr} src="{uri}" alt="{_esc(alt)}" loading="lazy">'
 
 
+def _plates(dark, light, alt, id_) -> str:
+    """A brain figure in both themes: the dark plate for the dark dashboard,
+    the white one for light mode. The white one carries ``id_`` so the
+    clinical view (and the PDF) borrow it; without it, the dark one does."""
+    if not light:
+        return f'<div class="plate">{_img(dark, alt, id_)}</div>'
+    if not dark:
+        return f'<div class="plate light">{_img(light, alt, id_)}</div>'
+    return (f'<div class="theme-img dark-img"><div class="plate">{_img(dark, alt)}</div></div>'
+            f'<div class="theme-img light-img"><div class="plate light">{_img(light, alt, id_)}'
+            '</div></div>')
+
+
 def _borrow(id_, alt) -> str:
     return f'<img data-src-from="{_esc(id_)}" alt="{_esc(alt)}">'
 
@@ -423,30 +489,72 @@ def _flatmaps(a, id_prefix) -> str:
 # =========================================================================== #
 # Single lesion
 # =========================================================================== #
-def _main_structure(facts) -> "tuple[str, float] | None":
-    best = None
-    for h in facts.get("hemispheres", []):
-        side = h["hemisphere"] if h["hemisphere"] in ("left", "right") else ""
-        for lb in h["lobes"]:
-            name = f"{side} {lb['lobe'].lower()}".strip()
-            if best is None or lb["pct_of_lesion"] > best[1]:
-                best = (name, lb["pct_of_lesion"])
-        if h.get("wm_pct", 0) and (best is None or h["wm_pct"] > best[1]):
-            best = (f"{side} white matter".strip(), h["wm_pct"])
-    return best
+_UNNAMED = {"white_matter": "unnamed white matter", "cortex": "cortex outside named regions",
+            "deep_grey": "deep grey matter outside named regions", "csf": "CSF spaces",
+            "ventricles": "ventricles", "cerebellum": "cerebellum outside named regions",
+            "brainstem": "brainstem outside named regions", "outside": "outside the brain"}
 
 
 def _composition(facts) -> "list[tuple[str, float]]":
+    """Share of the lesion per compartment: lobes per side, named white
+    matter, and the rest split by tissue (the same split the description
+    uses), largest first."""
     rows = []
+    by_side = facts.get("unlabelled_tissue_by_side") or {}
     for h in facts.get("hemispheres", []):
         side = h["hemisphere"] if h["hemisphere"] in ("left", "right") else "midline"
+        pre = "" if side == "midline" else f"{side} "
         for lb in h["lobes"]:
-            rows.append((f"{side} {lb['lobe'].lower()}", lb["pct_of_lesion"]))
+            rows.append((f"{pre}{fmt.lobe_word(lb['lobe'], short=True)}", lb["pct_of_lesion"]))
         if h.get("wm_pct"):
-            rows.append((f"{side} white matter (named tracts)", h["wm_pct"]))
-        if h.get("unlabelled_pct"):
-            rows.append((f"{side} unnamed tissue", h["unlabelled_pct"]))
+            rows.append((f"{pre}white matter (named tracts)", h["wm_pct"]))
+        if h.get("unlabelled_pct") and not by_side:
+            rows.append((f"{pre}unnamed tissue", h["unlabelled_pct"]))
+    outside = 0.0
+    for side, comp in by_side.items():
+        pre = "" if side == "midline" else f"{side} "
+        for k, v in comp.items():
+            if k == "outside":
+                outside += v
+            else:
+                rows.append((f"{pre}{_UNNAMED.get(k, k)}", v))
+    if outside:
+        rows.append(("outside the brain", round(outside, 1)))
     return sorted([r for r in rows if r[1] >= 0.5], key=lambda r: -r[1])
+
+
+def _main_structure(facts) -> "tuple[str, float] | None":
+    comp = _composition(facts)
+    return comp[0] if comp else None
+
+
+_TISSUE_SHORT = {"cortex": "cortex", "white_matter": "WM", "deep_grey": fmt.DEEP_GREY_SHORT,
+                 "cerebellum": "cerebellum", "brainstem": "brainstem", "ventricles": "ventricles",
+                 "csf": "CSF", "outside": "outside"}
+_LOC_SHORT = {"periventricular": "periventricular", "juxtacortical": "juxtacortical",
+              "cortical": "cortical", "deep white matter": "deep WM",
+              "deep grey matter": fmt.DEEP_GREY_SHORT, "infratentorial": "infratentorial",
+              "outside the brain": "outside"}
+
+
+def _tissue_kpi(t: dict, n_parts: int) -> "tuple[str, str]":
+    """('cortico-subcortical', '53% cortex · 35% WM') or, for many parts,
+    ('4 periventricular', 'of 7 · 2 deep WM · 1 infratentorial')."""
+    comp = t.get("composition") or {}
+    counts = {k: v for k, v in (t.get("counts") or {}).items() if v}
+    if n_parts > 3 and counts:
+        order = sorted(counts.items(), key=lambda kv: -kv[1])
+        head = f"{order[0][1]} {_LOC_SHORT[order[0][0]]}"
+        rest = " · ".join(f"{v} {_LOC_SHORT[k]}" for k, v in order[1:3])
+        return head, f"of {n_parts}" + (f" · {rest}" if rest else "")
+    top = sorted(((k, v) for k, v in comp.items() if v >= 5 and k != "outside"), key=lambda kv: -kv[1])
+    return (t.get("class") or "—"), " · ".join(f"{v:.0f}% {_TISSUE_SHORT[k]}" for k, v in top[:3])
+
+
+def _tissue_text(t: dict) -> str:
+    comp = t.get("composition") or {}
+    items = sorted(((k, v) for k, v in comp.items() if v >= 0.5), key=lambda kv: -kv[1])
+    return ", ".join(f"{_TISSUE_SHORT[k]} {v:.0f}%" for k, v in items)
 
 
 def _damaged(facts, limit=8) -> "list[dict]":
@@ -464,25 +572,30 @@ def _damaged(facts, limit=8) -> "list[dict]":
     return sorted(rows, key=lambda r: -r["dmg"])[:limit]
 
 
-def _territories(facts, short: bool = False) -> "list[tuple[str, float, bool]]":
-    """Territory parts. ``short``: 'L MCA · frontal part' / 'L lenticulostriate'."""
+def _territories(facts, short: bool = True) -> "list[tuple[str, float, bool]]":
+    """Territory parts, short form ('L MCA · frontal part', 'L lat.
+    lenticulostriate', 'bilateral VB · basilar artery'). ``short=False``
+    keeps the atlas's part names after the short territory."""
     rows = []
     for t in facts.get("territories", []):
-        side = t["hemisphere"] if t["hemisphere"] in ("left", "right") else ""
+        s1 = fmt.side_short(t["hemisphere"])
+        s1 = f"{s1} " if s1 else ""
         for pp in t["parts"]:
             label = pp["name"].replace(" territory", "")
-            if short:
-                s1 = {"left": "L ", "right": "R "}.get(side, "")
-                if ", " in label:
-                    label = f"{s1}{t['territory']} · {label.split(', ', 1)[1]}"
-                elif pp["deep"]:
-                    label = f"{s1}{label.replace('lateral ', 'lat. ').replace('medial ', 'med. ')}"
-                else:
-                    label = f"{s1}{t['territory']}"
-                rows.append((label, pp["pct_of_lesion"], pp["deep"]))
+            if ", " in label:
+                label = f"{s1}{t['territory']} · {label.split(', ', 1)[1]}"
+            elif pp["deep"]:
+                if short:
+                    label = label.replace("lateral ", "lat. ").replace("medial ", "med. ")
+                label = f"{s1}{label}"
             else:
-                rows.append((f"{side} {label}".strip(), pp["pct_of_lesion"], pp["deep"]))
+                label = f"{s1}{t['territory']}"
+            rows.append((label, pp["pct_of_lesion"], pp["deep"]))
     return sorted([r for r in rows if r[1] >= 1], key=lambda r: -r[1])[:8]
+
+
+_TERR_LEGEND = ("ACA, MCA, PCA: anterior, middle and posterior cerebral artery; VB: vertebrobasilar; "
+                "L/R: left/right. Territories from Liu et al. 2023.")
 
 
 def _atlas_details(a, prefix) -> str:
@@ -568,34 +681,39 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
             f'<div class="meta" title="{_esc(src)}">{_esc(_basename(src))}{" · " if src else ""}{_esc(ts)} · analysed in '
             f'{_esc(res.get("elapsed", "?"))}</div></div><span class="spacer"></span>'
             f'{_scope_pill(manifest)}<span class="pill">{_esc(_KIND.get(manifest.get("kind"), "Report"))}</span></div>')
-    side = (f'<div class="side" role="img" aria-label="{m["pct_left"]:.0f}% left, {m["pct_right"]:.0f}% right">'
+    side = (f'<div class="side" role="img" aria-label="{m["pct_left"]:.0f}% left, '
+            f'{m.get("pct_midline", 0):.0f}% midline, {m["pct_right"]:.0f}% right">'
             f'<span class="l" style="width:{m["pct_left"]}%"></span>'
             f'<span class="m" style="width:{m.get("pct_midline", 0)}%"></span>'
             f'<span class="r" style="width:{m["pct_right"]}%"></span></div>')
-    qc_word = {"ok": "No problems", "warn": f"{n_warn} to check", "error": f"{n_warn} problem"
-               + ("s" if n_warn != 1 else "")}[worst]
+    n_flags = f"{n_warn} flag" + ("s" if n_warn != 1 else "")
+    qc_sub = "mask quality checks" if worst == "ok" else f"{n_flags} · mask quality"
+    t0 = terrs[0] if terrs else None
     kpis = [
-        ("Volume", f'{m["volume_cc"]:.2f} cm³' if m["volume_cc"] < 10 else f'{m["volume_cc"]:.1f} cm³',
-         f'{m["n_voxels"]:,} voxels'),
-        ("Parts", str(parts), "separate parts" if parts != 1 else "one connected lesion"),
-        ("Side", f'{m["pct_left"]:.0f}% L · {m["pct_right"]:.0f}% R', side),
-        ("Main territory", (f'{terrs[0]["hemisphere"]} {terrs[0]["territory"]}' if terrs else "—"),
-         f'{terrs[0]["pct_of_lesion"]:.0f}% of the lesion' if terrs else "no territory data"),
+        ("Size", fmt.volume(m["volume_mm3"]),
+         (f"{parts} separate parts" if parts != 1 else "one connected lesion")
+         + f' · {m["n_voxels"]:,} voxels'),
+        ("Side", f'{m["pct_left"]:.0f}% L · {m["pct_right"]:.0f}% R'
+         + (f' · {m["pct_midline"]:.0f}% mid' if m.get("pct_midline", 0) >= 1 else ""), side),
+        ("Main territory", fmt.territory_short(t0["hemisphere"], t0["territory"]) if t0 else "—",
+         f'{t0["pct_of_lesion"]:.0f}% of the lesion' if t0 else "no territory data"),
         ("Main location", main[0] if main else "—", f"{main[1]:.0f}% of the lesion" if main else ""),
-        ("Quality", f'<span class="status {worst}"><span class="dot"></span>{_esc(qc_word)}</span>',
-         "mask quality checks"),
+        ("Tissue", *_tissue_kpi(res.get("tissue") or {}, parts)),
+        ("Quality", f'<span class="status {worst}"><span class="dot"></span>{_esc(fmt.quality_label(worst))}</span>',
+         qc_sub),
     ]
     kpi_html = "".join(f'<div class="kpi"><div class="k">{_esc(k)}</div>'
-                       f'<div class="v{" text" if k in ("Main territory", "Main location", "Quality", "Side") else ""}">'
+                       f'<div class="v{" text" if k in ("Main territory", "Main location", "Quality", "Side", "Tissue") else ""}"'
+                       f'{"" if k == "Quality" else " title=" + chr(34) + _esc(v) + chr(34)}>'
                        f'{v if k in ("Quality",) else _esc(v)}</div><div class="s">'
                        f'{s if k == "Side" else _esc(s)}</div></div>' for k, v, s in kpis)
     desc = "".join(f'<p><span class="h">{_esc(h)}</span>{_emph(p)}</p>' for h, p in _desc_sections(res))
     figs = []
-    if res.get("glass_uri"):
-        figs.append(f'<figure><div class="plate">{_img(res["glass_uri"], "Glass-brain projections of the lesion", "img-glass")}</div>'
+    if res.get("glass_uri") or res.get("glass_uri_light"):
+        figs.append(f'<figure>{_plates(res.get("glass_uri"), res.get("glass_uri_light"), "Glass-brain projections of the lesion", "img-glass")}'
                     '<figcaption>Glass-brain projections (left, right, top, front)</figcaption></figure>')
-    if res.get("slices_uri"):
-        figs.append(f'<figure><div class="plate">{_img(res["slices_uri"], "Orthogonal slices through the lesion centre", "img-slices")}</div>'
+    if res.get("slices_uri") or res.get("slices_uri_light"):
+        figs.append(f'<figure>{_plates(res.get("slices_uri"), res.get("slices_uri_light"), "Orthogonal slices through the lesion centre", "img-slices")}'
                     f'<figcaption>Slices through the lesion centre ({", ".join(str(c) for c in m["center_of_mass_mm"])} mm)</figcaption></figure>')
     top = f'<div class="cols"><section class="card desc"><h2>Description</h2>{desc or "<p>No description.</p>"}</section>'
     top += f'<section class="card"><h2>Lesion</h2><div class="figs">{"".join(figs) or "<p class=note>No figures (plots were off).</p>"}</div></section></div>'
@@ -682,22 +800,40 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
     out.append(h2("Mask quality"))
     warn = [f for f in flags if f["severity"] != "info"]
     if warn:
-        out += [f'<p class="flagline {f["severity"]}">{_esc(f["message"])}</p>' for f in warn]
+        out += [f'<p class="flagline {f["severity"]}"><strong>{fmt.quality_label(f["severity"])}:</strong> '
+                f'{_esc(f["message"])}</p>' for f in warn]
     else:
-        out.append('<p class="ok">No quality problems found.</p>')
+        out.append('<p class="ok"><strong>OK:</strong> no quality problems found.</p>')
     notes = [f for f in flags if f["severity"] == "info"]
     if notes:
         out.append('<p class="fine">' + " ".join(_esc(f["message"]) for f in notes) + "</p>")
     out.append(h2("Measurements"))
-    rows = [("Volume", f'{m["volume_cc"]} cm³ ({m["n_voxels"]:,} voxels of {m["voxel_volume_mm3"]} mm³)'),
+    rows = [("Volume", f'{fmt.volume(m["volume_mm3"])} ({m["n_voxels"]:,} voxels of {m["voxel_volume_mm3"]} mm³)'),
             ("Separate parts", facts.get("n_clusters", m["n_components"])),
             ("Hemispheres", f'{m["pct_left"]:.0f}% left, {m["pct_right"]:.0f}% right'
              + (f', {m["pct_midline"]:.0f}% midline' if m.get("pct_midline") else "")),
             ("Laterality index", f'{m["laterality_index"]:+.2f}'),
             ("Centre of mass (MNI)", ", ".join(f"{c:.0f}" for c in m["center_of_mass_mm"]) + " mm"),
             ("Extent", " × ".join(f"{b:.0f}" for b in m["bbox_size_mm"]) + " mm")]
+    tis = res.get("tissue") or {}
+    if tis.get("class"):
+        rows.append(("Tissue", f'{tis["class"]} ({_tissue_text(tis)})'))
     out.append('<table><tbody>' + "".join(f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>"
                                           for k, v in rows) + "</tbody></table>")
+    tparts = tis.get("parts") or []
+    if len(tparts) > 1:
+        shown = tparts[:15]
+        out.append('<p class="fine" style="margin-top:3mm">Separate parts by location '
+                   f'(reaching a structure = within {tis.get("contact_mm", 3):g} mm of it in the template)</p>'
+                   '<table><thead><tr><th>Part</th><th class="n">cm³</th><th>Tissue</th><th>Location</th>'
+                   '<th class="n">To ventricle</th><th class="n">To cortex</th></tr></thead><tbody>'
+                   + "".join(f'<tr><td>{pt["id"]}</td><td class="n" data-sort="{pt["volume_mm3"]}">{fmt.volume_num(pt["volume_mm3"])}</td>'
+                             f'<td>{_esc(pt.get("tissue_class") or "—")}</td>'
+                             f'<td>{_esc(pt["class"])}</td><td class="n">{pt["dist_ventricle_mm"]:.0f} mm</td>'
+                             f'<td class="n">{pt["dist_cortex_mm"]:.0f} mm</td></tr>' for pt in shown)
+                   + "</tbody></table>"
+                   + (f'<p class="fine">{len(tparts) - len(shown)} smaller parts not listed; '
+                      'all are in the parts CSV.</p>' if len(tparts) > len(shown) else ""))
     comp = _composition(facts)
     dmg = _damaged(facts, limit=12)
     terrs = _territories(facts)
@@ -715,11 +851,11 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
                                  f'<td class="n">{r["dmg"]:.1f}%</td><td class="n">{r["share"]:.1f}%</td></tr>'
                                  for r in dmg) + "</tbody></table>")
         if terrs:
-            out.append('<p class="fine" style="margin-top:3mm">Vascular territories (Liu et al. 2023)</p>'
+            out.append('<p class="fine" style="margin-top:3mm">Vascular territories</p>'
                        '<table><thead><tr><th>Territory</th><th class="n">% of lesion</th></tr></thead><tbody>'
                        + "".join(f'<tr><td>{_esc(n)}{" (deep perforator)" if deep else ""}</td>'
                                  f'<td class="n">{v:.1f}%</td></tr>' for n, v, deep in terrs)
-                       + "</tbody></table>")
+                       + f'</tbody></table><p class="fine">{_TERR_LEGEND}</p>')
     figs = []
     k = 0
     if res.get("glass_uri"):
@@ -757,7 +893,8 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
                'image affine; region overlap resamples the mask onto each atlas grid (nearest '
                'neighbour). Atlases: AAL (Tzourio-Mazoyer 2002), Schaefer-100 (Schaefer 2018), DKT31 '
                '(Klein &amp; Tourville 2012), JHU ICBM-DTI-81 (Mori 2008), arterial territories '
-               '(Liu 2023). Functional labels describe location only, not symptoms. This report is '
+               '(Liu 2023); tissue classes from DKT31 and the ICBM 2009a white-matter map (Fonov '
+               '2011). Location classes (periventricular, juxtacortical, ...) are template-based. Functional labels describe location only, not symptoms. This report is '
                'generated automatically and is not a clinical diagnosis.</p>')
     out.append("</article>")
     return "".join(out)
@@ -766,7 +903,7 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
 # =========================================================================== #
 # Group
 # =========================================================================== #
-def _group_rows(recs, key, limit=10, name_fn=None, skip=()) -> str:
+def _group_rows(recs, key, limit=10, name_fn=None, skip=(), title_fn=None) -> str:
     """Cohort-mean rows; bars scaled to the largest value in the list so
     small group means stay readable (the printed number is absolute)."""
     rows = [r for r in _records(recs) if r[key] not in skip][:limit]
@@ -777,7 +914,8 @@ def _group_rows(recs, key, limit=10, name_fn=None, skip=()) -> str:
         nm = name_fn(r[key]) if name_fn else r[key]
         out.append(_row(nm, r[col], "dmg",
                         f'<span class="chip">{r["NSubjects"]}/{r["NSubjectsTotal"]}</span>',
-                        max_value=top, digits=1))
+                        max_value=top, digits=1, title=title_fn(r[key]) if title_fn else None,
+                        key=f"{key}:{r[key]}"))
     return "".join(out)
 
 
@@ -798,6 +936,14 @@ def _group_table(recs, key, label, limit=30) -> str:
             f"<tbody>{body}</tbody></table></div>{more}")
 
 
+def _group_tissue_kpi(classes: dict, n: int) -> list:
+    if not classes:
+        return []
+    order = sorted(classes.items(), key=lambda kv: -kv[1])
+    rest = " · ".join(f"{v} {k}" for k, v in order[1:3])
+    return [("Tissue", order[0][0], f"{order[0][1]} of {n}" + (f" · {rest}" if rest else ""))]
+
+
 def render_group(res: dict, style: "ReportStyle | None" = None) -> str:
     """The group report (dashboard + clinical views in one file)."""
     manifest = res.get("manifest") or {}
@@ -815,15 +961,17 @@ def render_group(res: dict, style: "ReportStyle | None" = None) -> str:
             ("Median volume", f'{res["median_volume_cc"]} cm³', f"range {vols[0]}–{vols[-1]} cm³"),
             ("Max overlap", f'{res["max_overlap"]} of {n}', "subjects at the most shared voxel"),
             ("Bilateral", f'{res.get("n_bilateral", 0)} of {n}', "lesions in both hemispheres"),
+            *_group_tissue_kpi(res.get("tissue_classes") or {}, n),
             ("Quality", f'<span class="status {"warn" if q else "ok"}"><span class="dot"></span>'
                         f'{q} of {n} to check</span>', "mask quality checks")]
-    kpi_html = "".join(f'<div class="kpi"><div class="k">{_esc(k)}</div><div class="v">'
+    kpi_html = "".join(f'<div class="kpi"><div class="k">{_esc(k)}</div>'
+                       f'<div class="v{" text" if k in ("Tissue", "Quality") else ""}">'
                        f'{v if k == "Quality" else _esc(v)}</div><div class="s">{_esc(s)}</div></div>'
                        for k, v, s in kpis)
     overlap = ""
-    if res.get("overlap_uri"):
-        overlap = (f'<section class="card"><h2>Lesion overlap</h2><div class="plate">'
-                   f'{_img(res["overlap_uri"], "Lesion overlap map", "img-overlap")}</div>'
+    if res.get("overlap_uri") or res.get("overlap_uri_light"):
+        overlap = (f'<section class="card"><h2>Lesion overlap</h2>'
+                   f'{_plates(res.get("overlap_uri"), res.get("overlap_uri_light"), "Lesion overlap map", "img-overlap")}'
                    '<figcaption>Number of subjects with a lesion at each voxel (axial slices).'
                    '</figcaption></section>')
     subj_rows = []
@@ -841,12 +989,14 @@ def render_group(res: dict, style: "ReportStyle | None" = None) -> str:
                 "</span></span>")
         subj_rows.append(
             f'<tr><td>{nm}</td><td class="n">{mm["volume_cc"]}</td><td class="n">{mm["n_components"]}</td>'
-            f'<td>{mini}</td><td>{_esc(s.get("territory") or "—")}</td>'
-            f'<td><span class="qc-badge {qw}">{qlabel}</span> <span class="muted">{_esc(ids)}</span></td>'
+            f'<td data-sort="{mm["pct_left"]:.1f}">{mini}</td><td>{_esc(s.get("territory") or "—")}</td>'
+            f'<td>{_esc((s.get("tissue") or {}).get("class") or "—")}</td>'
+            f'<td data-sort="{ {"ok": 0, "warn": 1, "error": 2}[qw]}"><span class="qc-badge {qw}">{qlabel}</span> <span class="muted">{_esc(ids)}</span></td>'
             f'<td class="muted">{_emph(s.get("summary", ""))}</td></tr>')
-    subj = ('<section class="card"><h2>Subjects</h2><div class="tablewrap"><table><thead><tr>'
-            '<th>Subject</th><th class="n">cm³</th><th class="n">Parts</th><th>L / R</th>'
-            '<th>Main territory</th><th>Quality</th><th>Summary</th></tr></thead><tbody>'
+    subj = (f'<section class="card"><h2>Subjects<span class="count">{n}</span></h2>'
+            f'<div class="tablewrap{" scroll" if n > 12 else ""}"><table><thead><tr>'
+            '<th>Subject</th><th class="n">cm³</th><th class="n">Parts</th><th title="percent left">L / R</th>'
+            '<th>Main territory</th><th>Tissue</th><th>Quality</th><th>Summary</th></tr></thead><tbody>'
             + "".join(subj_rows) + "</tbody></table></div></section>")
     cards = []
     if by.get("dk", {}).get("lobe_df"):
@@ -854,7 +1004,7 @@ def render_group(res: dict, style: "ReportStyle | None" = None) -> str:
                      f'{_group_rows(by["dk"]["lobe_df"], "Lobe")}</div></section>')
     if by.get("arterial", {}).get("network_df"):
         cards.append(f'<section class="card"><h2>Vascular territories</h2><div class="rows">'
-                     f'{_group_rows(by["arterial"]["network_df"], "Network", name_fn=lambda k: _TERR.get(k, k), skip=("Ventricle",))}'
+                     f'{_group_rows(by["arterial"]["network_df"], "Network", skip=("Ventricle",), title_fn=lambda k: fmt.TERRITORY_NAMES.get(k, k))}'
                      "</div></section>")
     if by.get("schaefer", {}).get("network_df"):
         cards.append(f'<section class="card"><h2>Yeo-7 networks</h2><div class="rows">'
@@ -899,13 +1049,17 @@ def render_group(res: dict, style: "ReportStyle | None" = None) -> str:
     c.append('<table><tbody>' + "".join(f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in [
         ("Subjects", n), ("Median volume", f'{res["median_volume_cc"]} cm³ (range {vols[0]}–{vols[-1]})'),
         ("Bilateral lesions", f'{res.get("n_bilateral", 0)} of {n}'),
+        *([("Tissue class", "; ".join(f"{k} {v}" for k, v in (res.get("tissue_classes") or {}).items()))]
+          if res.get("tissue_classes") else []),
         ("Masks with quality warnings", f"{q} of {n}")]) + "</tbody></table>")
     c.append(h2("Subjects"))
     c.append('<table><thead><tr><th>Subject</th><th class="n">cm³</th><th class="n">L/R %</th>'
-             '<th>Main territory</th><th>Quality</th></tr></thead><tbody>' + "".join(
+             '<th>Main territory</th><th>Tissue</th><th>Quality</th></tr></thead><tbody>' + "".join(
                  f'<tr><td>{_esc(s["name"])}</td><td class="n">{s["morphometry"]["volume_cc"]}</td>'
                  f'<td class="n">{s["morphometry"]["pct_left"]:.0f}/{s["morphometry"]["pct_right"]:.0f}</td>'
-                 f'<td>{_esc(s.get("territory") or "—")}</td><td>{_esc(_qc_worst(s.get("qc")))}</td></tr>'
+                 f'<td>{_esc(s.get("territory") or "—")}</td>'
+                 f'<td>{_esc((s.get("tissue") or {}).get("class") or "—")}</td>'
+                 f'<td>{_esc(_qc_worst(s.get("qc")))}</td></tr>'
                  for s in subjects) + "</tbody></table>")
     c.append(h2("Involvement"))
     for key, df_key, label in (("dk", "lobe_df", "Lobe"), ("arterial", "network_df", "Network"),

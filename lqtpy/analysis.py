@@ -28,6 +28,7 @@ import time
 import numpy as np
 import nibabel as nib
 
+from . import _format as _fmt
 from . import registry
 from . import tracts as _tracts
 from .atlases import DEFAULT_ATLASES, load_atlas
@@ -197,6 +198,50 @@ def _extra_names(extras) -> "list[str]":
     return list(extras)
 
 
+_PART_COLUMNS = ["Part", "Voxels", "VolumeMM3", "Location", "TissueClass", "PctCortex", "PctWhiteMatter",
+                 "PctDeepGrey", "PctCerebellum", "PctBrainstem", "PctVentricles", "PctCSF",
+                 "PctOutside", "DistVentricleMM", "DistCortexMM", "MaxAxialMM"]
+_TISSUE_KEYS = [("PctCortex", "cortex"), ("PctWhiteMatter", "white_matter"),
+                ("PctDeepGrey", "deep_grey"), ("PctCerebellum", "cerebellum"),
+                ("PctBrainstem", "brainstem"), ("PctVentricles", "ventricles"),
+                ("PctCSF", "csf"), ("PctOutside", "outside")]
+_TISSUE_COLUMNS = ["TissueClass", "PctCortex", "PctWhiteMatter", "PctDeepGrey", "PctInfratentorial",
+                   "NPeriventricular", "NJuxtacortical", "NCortical", "NDeepWhiteMatter",
+                   "NDeepGrey", "NInfratentorial", "NOutsideBrain"]
+
+
+def _part_row(pt: dict) -> dict:
+    row = {"Part": pt["id"], "Voxels": pt["voxels"], "VolumeMM3": pt["volume_mm3"],
+           "Location": pt["class"], "TissueClass": pt.get("tissue_class") or "",
+           "DistVentricleMM": pt["dist_ventricle_mm"],
+           "DistCortexMM": pt["dist_cortex_mm"], "MaxAxialMM": pt["max_axial_mm"]}
+    row.update({col: pt["composition"].get(key, 0.0) for col, key in _TISSUE_KEYS})
+    return row
+
+
+def _tissue_cols(t: dict) -> dict:
+    comp = t.get("composition") or {}
+    counts = t.get("counts") or {}
+    return {"TissueClass": t.get("class") or "",
+            "PctCortex": comp.get("cortex", 0.0), "PctWhiteMatter": comp.get("white_matter", 0.0),
+            "PctDeepGrey": comp.get("deep_grey", 0.0),
+            "PctInfratentorial": round(comp.get("cerebellum", 0.0) + comp.get("brainstem", 0.0), 1),
+            "NPeriventricular": counts.get("periventricular", 0),
+            "NJuxtacortical": counts.get("juxtacortical", 0), "NCortical": counts.get("cortical", 0),
+            "NDeepWhiteMatter": counts.get("deep white matter", 0),
+            "NDeepGrey": counts.get("deep grey matter", 0),
+            "NInfratentorial": counts.get("infratentorial", 0),
+            "NOutsideBrain": counts.get("outside the brain", 0)}
+
+
+def _count_by(values) -> dict:
+    out: dict = {}
+    for v in values:
+        if v:
+            out[v] = out.get(v, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+
 # --------------------------------------------------------------------------- #
 # One lesion, no file output
 # --------------------------------------------------------------------------- #
@@ -219,11 +264,22 @@ def _analyse(p, atlases, *, kind, tracts, plots, qc, describe, profile, extras,
     else:
         man.add("qc", "Mask quality checks", SKIPPED, reason="turned off (qc=False)")
 
-    glass_uri = slices_uri = None
+    from . import tissue as _tissue
+    loc = _tissue.locate(p)
+    tissue_res = {"class": loc["class"], "composition": loc["composition"],
+                  "counts": loc["counts"], "contact_mm": loc["contact_mm"],
+                  "parts": loc["parts"]}
+    man.add("tissue", "Tissue composition and location classes", RAN)
+
+    glass_uri = slices_uri = glass_light = slices_light = None
     if plots:
         from . import plotting
+        com = morph["center_of_mass_mm"]
         glass_uri = plotting.glass_brain_png(p.img)
-        slices_uri = plotting.slices_png(p.img, cut_coords=morph["center_of_mass_mm"])
+        slices_uri = plotting.slices_png(p.img, cut_coords=com)
+        # White-background versions: light mode, clinical report, PDF.
+        glass_light = plotting.glass_brain_png(p.img, theme="light")
+        slices_light = plotting.slices_png(p.img, cut_coords=com, theme="light")
 
     atlas_results = []
     for key in atlases:
@@ -298,11 +354,14 @@ def _analyse(p, atlases, *, kind, tracts, plots, qc, describe, profile, extras,
         "was_binary": p.was_binary,
         "morphometry": morph,
         "qc": [f.to_dict() for f in flags],
+        "tissue": tissue_res,
         "description": description,
         "measures": {k: {"values": v["values"], "descriptors": [d.text for d in v["descriptors"]]}
                      for k, v in measures.items()},
         "glass_uri": glass_uri,
         "slices_uri": slices_uri,
+        "glass_uri_light": glass_light,
+        "slices_uri_light": slices_light,
         "atlases": atlas_results,
         "tracts": tract_res,
         "disconnection": discon,
@@ -320,9 +379,13 @@ def _write_single(result, out_dir, name, *, plots, report_style=None, back_link=
     summary = {"name": name, "qc": result["qc"], "manifest": result["manifest"],
                "measures": result["measures"],
                "description": (result["description"] or {}).get("text"),
+               "tissue": {k: v for k, v in (result.get("tissue") or {}).items() if k != "parts"},
                "coverage": {a["key"]: a["coverage"] for a in result["atlases"]}}
     with open(os.path.join(out_dir, f"{name}_summary.json"), "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=2, default=str)
+    if result.get("tissue") and result["tissue"]["parts"]:
+        _write_csv(os.path.join(out_dir, f"{name}_parts.csv"),
+                   [_part_row(pt) for pt in result["tissue"]["parts"]], _PART_COLUMNS)
     for a in result["atlases"]:
         _write_csv(os.path.join(out_dir, f"{name}_{a['key']}_damage.csv"), a["df"], _DAMAGE_COLUMNS)
         if a.get("lobe_df"):
@@ -514,6 +577,7 @@ def analyze_group(inputs, atlases=None, out_dir=None, threshold=0.5,
     per_net = {k: [] for k in atlases}
     tract_frames = []
     qc_counts: "dict[str, int]" = {}
+    tissue_counts: "dict[str, int]" = {}
     subject_manifest = None
     for i, (name, src) in enumerate(pairs, start=1):
         p = prepare(src, threshold, name=name)
@@ -541,9 +605,12 @@ def analyze_group(inputs, atlases=None, out_dir=None, threshold=0.5,
             summary_para = dict(res["description"]["sections"]).get("Summary", "")
         facts = (res["description"] or {}).get("facts") or {}
         terrs = facts.get("territories") or []
-        main_terr = (f"{terrs[0]['hemisphere']} {terrs[0]['territory']}".strip()
+        main_terr = (_fmt.territory_short(terrs[0]["hemisphere"], terrs[0]["territory"])
                      if terrs else None)
+        tis = res.get("tissue") or {}
+        tissue_counts = {k: tissue_counts.get(k, 0) + v for k, v in (tis.get("counts") or {}).items()}
         entry = {"name": name, "morphometry": res["morphometry"],
+                 "tissue": {k: v for k, v in tis.items() if k != "parts"},
                  "top_region": ref_df[0]["RegionName"] if ref_df else "-",
                  "territory": main_terr,
                  "qc": res["qc"], "qc_worst": _worst(res["qc"]),
@@ -556,13 +623,14 @@ def analyze_group(inputs, atlases=None, out_dir=None, threshold=0.5,
                 entry["report_path"] = os.path.relpath(res["report_path"], out_dir)
         subjects.append(entry)
         if verbose:
-            print(f"[lqtpy]   [{i}/{n}] {name}: {res['morphometry']['volume_cc']} cc")
+            print(f"[lqtpy]   [{i}/{n}] {name}: {_fmt.volume(res['morphometry']['volume_mm3'])}")
 
     freq_img = nib.Nifti1Image(freq, ref_img.affine)
-    overlap_uri = None
+    overlap_uri = overlap_light = None
     if plots:
         from . import plotting
         overlap_uri = plotting.group_overlap_png(freq_img, n)
+        overlap_light = plotting.group_overlap_png(freq_img, n, theme="light")
 
     atlas_results = []
     for key in atlases:
@@ -599,8 +667,11 @@ def analyze_group(inputs, atlases=None, out_dir=None, threshold=0.5,
         "n_bilateral": sum(1 for s in subjects if s["morphometry"].get("bilateral")),
         "max_overlap": int(freq.max()),
         "qc_counts": qc_counts,
+        "tissue_classes": _count_by(s["tissue"].get("class") for s in subjects),
+        "tissue_part_counts": tissue_counts,
         "n_subjects_with_warnings": sum(1 for s in subjects if s["qc_worst"] in ("warn", "error")),
         "overlap_uri": overlap_uri,
+        "overlap_uri_light": overlap_light,
         "atlases": atlas_results,
         "tracts": None if tract_agg is None else {"df": tract_agg},
         "manifest": man.to_dict(),
@@ -623,11 +694,11 @@ def analyze_group(inputs, atlases=None, out_dir=None, threshold=0.5,
         if tract_agg:
             _write_csv(os.path.join(out_dir, "group_tracts.csv"), tract_agg, _GROUP_TRACT_COLUMNS)
         morph_keys = list(subjects[0]["morphometry"].keys())
-        rows = [{"Subject": s["name"], "QC": s["qc_worst"] or "ok",
+        rows = [{"Subject": s["name"], "QC": _fmt.quality_label(s["qc_worst"]),
                  "QCFlags": ";".join(f["id"] for f in s["qc"] if f["severity"] != "info"),
-                 **s["morphometry"]} for s in subjects]
+                 **_tissue_cols(s["tissue"]), **s["morphometry"]} for s in subjects]
         _write_csv(os.path.join(out_dir, "group_subject_summary.csv"), rows,
-                   ["Subject", "QC", "QCFlags"] + morph_keys)
+                   ["Subject", "QC", "QCFlags"] + _TISSUE_COLUMNS + morph_keys)
         if plots:
             from .report import render_group
             path = os.path.join(out_dir, "group_report.html")

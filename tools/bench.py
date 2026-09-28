@@ -46,7 +46,7 @@ def main():
     t = time.perf_counter()
     lqtpy.preload()
     qc.brain_mask()
-    print(f"preload (atlases, tract index, brain mask): {1000 * (time.perf_counter() - t):.0f} ms\n")
+    print(f"preload (atlases, tract index, brain mask, tissue maps): {1000 * (time.perf_counter() - t):.0f} ms\n")
     L = lesion()
     rows = [
         ("prepare", lambda: lqtpy.prepare(L)),
@@ -57,6 +57,7 @@ def main():
         ("lobe_overlap aal", lambda: api.lobe_overlap(L, "aal")),
         ("tract_proxy_overlap", lambda: api.tract_proxy_overlap(L)),
         ("qc.check", lambda: qc.check(L)),
+        ("tissue.locate", lambda: lqtpy.tissue.locate(L)),
         ("describe (stroke, no shape)", lambda: describe(L)),
     ]
 

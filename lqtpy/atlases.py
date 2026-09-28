@@ -1,6 +1,6 @@
 """Atlas registry.
 
-Five bundled atlases, all resolved lazily to NIfTI + a label table. ``aal``
+Six bundled atlases, all resolved lazily to NIfTI + a label table. ``aal``
 is the default/first atlas:
 
 - ``aal``      : AAL 116 anatomical regions (labels derived by spatial overlap
@@ -18,6 +18,11 @@ is the default/first atlas:
                  30 territories + lateral ventricles; ``Territory`` is the
                  major territory (ACA/MCA/PCA/VB). Its released header has
                  no origin; see ``tools/build_extra_atlases.py``.
+- ``tissue``   : one tissue class per voxel (cortex, cerebral white matter,
+                 deep grey matter, ventricles, cerebellum, brainstem, CSF),
+                 by hemisphere; built by ``tools/build_tissue_map.py``. Used
+                 by :mod:`lqtpy.tissue` for location words (periventricular,
+                 juxtacortical, ...); not a default table atlas.
 
 A host application can add its own atlases at runtime with
 :func:`register_atlas`/:func:`atlas_from_arrays`, and a plugin package can
@@ -374,6 +379,15 @@ _REGISTRY = {
         citation="Liu C-F, et al. Digital 3D Brain MRI Arterial Territories Atlas. "
                  "Sci Data 10:74, 2023.",
     ),
+    "tissue": dict(
+        name="Tissue classes (DKT31/CMA + ICBM 2009a white matter)",
+        img=lambda: _atlas_path("tissue_MNI152_1mm.nii.gz"),
+        labels=_table_labels("tissue_labels.csv"),
+        ggseg=False,
+        license="Derived from CC BY 4.0 (DKT) and ICBM 2009a (free with notice) data",
+        citation="Klein A, Tourville J. Front Neurosci 6:171, 2012; Fonov V, et al. "
+                 "NeuroImage 54(1):313-327, 2011.",
+    ),
 }
 
 #: aal is the default/first atlas. ``jhu`` (white matter) and ``arterial``
@@ -606,6 +620,7 @@ def preload(keys: "list[str] | None" = None) -> None:
     atlas doesn't pay the (one-time) load cost. Defaults to every *core*
     atlas plus host-registered ones (plugin atlases load on first use, since
     some fetch data). Also preloads the tract proxy index, the QC brain mask,
+    the tissue distance maps,
     and, if one has been built locally, the per-tract disconnection index --
     a no-op, not an error, when it hasn't.
     """
@@ -621,6 +636,9 @@ def preload(keys: "list[str] | None" = None) -> None:
     if "dk" in keys and "aal" in keys:
         from . import qc as _qc
         _qc.brain_mask()  # QC's out-of-brain / MNI checks (~0.6 s once)
+    if "tissue" in keys:
+        from . import tissue as _tissue
+        _tissue.distance_maps()  # location classes (~1 s once)
     from . import datasets as _datasets
     _datasets.preload_discon_index()
 

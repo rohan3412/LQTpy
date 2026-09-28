@@ -20,6 +20,19 @@ Implements Phases 0–7 of [docs/ROADMAP.md](docs/ROADMAP.md).
   axes, elongation/flatness, with calibrated plain-word interpretations
   (`tools/calibrate_shape.py`).
 - `lqtpy.atlas_coverage()`: labelled / unlabelled / outside-field-of-view shares.
+- Reports: every table sorts by clicking a column header; the group subjects list scrolls
+  inside its card (sticky header) past 12 subjects; brain figures (glass brain, slices, group
+  overlap) come in a white-background version for light mode, the clinical view and the PDF
+  (`glass_uri_light`, `slices_uri_light`, `overlap_uri_light` in results).
+- `lqtpy.tissue`: tissue composition (cortex, white matter, deep grey matter, ventricles,
+  cerebellum, brainstem, CSF, outside) and location classes per separate part
+  (periventricular, juxtacortical, cortical, deep white matter, deep grey matter,
+  infratentorial), from a new bundled `tissue` atlas built by `tools/build_tissue_map.py`
+  (DKT31/CMA + ICBM 2009a white matter). Descriptions gain a Tissue section
+  ("cortico-subcortical", "small subcortical lesion ... lacunar-sized"), small-vessel counts
+  by location, and a breakdown of the part no atlas names. Results carry
+  `result["tissue"]`; single runs write `<name>_parts.csv`; group subject tables gain tissue
+  columns; reports show a Tissue tile and, in the clinical view, a parts-by-location table.
 - Atlas label schema v2: `DisplayName`, `Hemisphere`, `Tissue`, `Network`, `Function`,
   `Territory` on every `RegionMeta` (bundled tables filled in by
   `tools/build_label_columns.py`).

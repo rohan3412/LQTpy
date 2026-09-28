@@ -197,6 +197,29 @@ derived polygon-coordinate data with attribution. This is **not** a publish bloc
   Oishi K, et al. *NeuroImage* 46(2):486-499, 2009.
 - **Checksum (bundled file):** sha256 `5b18de3d31635c45c03f752e71c75174c60891d97fd9886f43db37b7afc43525`.
 
+## `tissue_MNI152_1mm.nii.gz` and `../tissue_labels.csv`
+
+- **What it is:** one tissue class per voxel on the FSL MNI152 1 mm grid, split by
+  hemisphere: cortex, cerebral white matter, deep grey matter, lateral ventricles, third and
+  fourth ventricles, cerebellum, brainstem and sulcal/cisternal CSF. Used by `lqtpy.tissue`
+  for tissue composition and location classes (periventricular, juxtacortical, ...).
+- **Built by:** `tools/build_tissue_map.py`, from two sources:
+  - the bundled DKT31/CMA volume (above) for everything with an anatomical label: cortex
+    (plus hippocampus), deep grey nuclei, ventricles, cerebellum, brainstem;
+  - the ICBM 2009a symmetric grey- and white-matter probability maps shipped with nilearn
+    (`mni_icbm152_{gm,wm}_tal_nlin_sym_09a_converted.nii.gz`) for cerebral white matter
+    (WM probability >= 0.5 and >= GM) and to widen the cortical ribbon where DKT is thin.
+    The JHU labels also count as white matter. The rest of the filled brain is CSF.
+- **Checked:** overlaid on the ICBM T1 (the DKT cortex follows the template's grey
+  ribbon); class volumes are plausible (cerebral white matter 482 cm³, cortex 903 cm³
+  including the widened ribbon, lateral ventricles 19 cm³).
+- **Licence:** derived data. DKT31: CC BY 4.0. ICBM 2009a: free to use and redistribute
+  with the copyright notice (Copyright (C) 1993-2009 Louis Collins, McConnell Brain Imaging
+  Centre, Montreal Neurological Institute, McGill University).
+- **Citations:** Klein & Tourville 2012 (above); Fonov V, Evans AC, Botteron K, et al.
+  "Unbiased average age-appropriate atlases for pediatric studies." *NeuroImage*
+  54(1):313-327, 2011.
+
 ## Brain mask (QC)
 
 No separate file: `lqtpy.qc.brain_mask()` is built at run time from the bundled AAL and

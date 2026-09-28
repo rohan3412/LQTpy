@@ -42,7 +42,9 @@ def _safe(fn):
 
 
 #: The report's lesion hue (see ggseg_flat.THEMES): one colour for "lesion"
-#: in every brain figure, on a black plate that works in light and dark themes.
+#: in every brain figure. Brain figures come in two themes: ``"dark"`` (black
+#: plate, the dark dashboard) and ``"light"`` (white plate: light mode, the
+#: clinical report and PDF export).
 LESION_HEX = "#f5793a"
 
 
@@ -51,27 +53,27 @@ def _lesion_cmap():
     return ListedColormap([LESION_HEX, LESION_HEX])
 
 
-def glass_brain_png(lesion_img, title=None) -> str | None:
+def glass_brain_png(lesion_img, title=None, theme: str = "dark") -> str | None:
     from nilearn import plotting
 
     def build():
         disp = plotting.plot_glass_brain(
             lesion_img, title=title, cmap=_lesion_cmap(), colorbar=False,
-            display_mode="lyrz", alpha=0.95, threshold=0.5, black_bg=True,
+            display_mode="lyrz", alpha=0.95, threshold=0.5, black_bg=theme == "dark",
         )
         fig = disp.frame_axes.figure
         return _fig_to_uri(fig)
     return _safe(build)
 
 
-def slices_png(lesion_img, cut_coords, title=None) -> str | None:
+def slices_png(lesion_img, cut_coords, title=None, theme: str = "dark") -> str | None:
     from nilearn import plotting
 
     def build():
         disp = plotting.plot_roi(
             lesion_img, title=title, cut_coords=cut_coords,
             display_mode="ortho", cmap=_lesion_cmap(), alpha=0.75, colorbar=False,
-            black_bg=True,
+            black_bg=theme == "dark",
         )
         fig = disp.frame_axes.figure
         return _fig_to_uri(fig)
@@ -211,15 +213,20 @@ def ggseg_aseg_png(damage_by_aseg: dict, title="", theme: str = "light") -> str 
     return render_ggseg(damage_by_aseg, "aseg", title=title, theme=theme)
 
 
-def group_overlap_png(freq_img, n_subjects, title=None) -> str | None:
+def group_overlap_png(freq_img, n_subjects, title=None, theme: str = "dark") -> str | None:
     from nilearn import plotting
 
     def build():
-        from .ggseg_flat import lesion_cmap
+        from matplotlib.colors import LinearSegmentedColormap
+        from .ggseg_flat import THEMES, lesion_cmap
+        # On white, the light ramp's palest stops vanish against the anatomy:
+        # start one subject at a saturated orange instead.
+        cmap = (LinearSegmentedColormap.from_list("lqtpy_overlap_light", THEMES["light"]["ramp"][2:])
+                if theme == "light" else lesion_cmap(theme))
         disp = plotting.plot_stat_map(
-            freq_img, title=title, cmap=lesion_cmap("dark"), colorbar=True, threshold=0.5,
+            freq_img, title=title, cmap=cmap, colorbar=True, threshold=0.5,
             vmax=max(1, int(n_subjects)), display_mode="z", cut_coords=6,
-            black_bg=True,
+            black_bg=theme == "dark",
         )
         fig = disp.frame_axes.figure
         return _fig_to_uri(fig)

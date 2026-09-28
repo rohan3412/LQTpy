@@ -27,7 +27,7 @@ def test_hierarchy_facts_add_up(mca):
 def test_stroke_text(mca):
     d = describe(mca, shape=True)
     t = d.text
-    assert t.startswith("A single 14 cm³ lesion in the left hemisphere.")
+    assert t.startswith("A single 14.1 cm³ lesion in the left hemisphere.")
     assert "left frontal lobe" in t and "insula" in t
     assert "Broca's area" in t
     assert "not predictions of symptoms" in t

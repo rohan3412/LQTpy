@@ -16,6 +16,7 @@ dependency: each one builds on the one before it.
 | 5. Description | Done, including territories, white-matter structures and emphasis of key findings |
 | 6. Shape extras | Done: synthetic bands plus a 898-lesion cohort reference (aggregates only) |
 | 7. Reports | Done: dashboard (dark/light) + clinical view, Export PDF, `to_pdf()` |
+| Tissue and location classes (added 2026-09-28) | Done: `lqtpy.tissue`, bundled `tissue` atlas; cortical / juxtacortical / periventricular / deep white matter / deep grey / infratentorial per part, tissue composition per lesion, in descriptions, results and reports |
 
 Real-data validation: 1,231 clinical masks, no failures. QC was tuned on them (new
 `edge_artifact` check); a visual review of flagged samples confirmed the sparse-slice and

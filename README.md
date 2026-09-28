@@ -35,10 +35,12 @@ les = lqtpy.prepare("lesion_MNI.nii.gz")   # load and binarize once, reuse every
 print(lqtpy.describe(les))
 # A single 14 cm³ lesion in the left hemisphere.
 #
-# It involves the left frontal lobe (26%), insula (19%) and deep grey nuclei (3%). About half
-# of it (51%) lies in white matter or other tissue the DKT atlas doesn't label. In the left
-# frontal lobe it mainly involves the inferior frontal gyrus, pars opercularis (Broca's area;
-# 54% of it damaged) and the precentral gyrus (primary motor cortex; 4% of it damaged). ...
+# It involves the left frontal lobe (26%), insula (19%) and deep grey nuclei (3%). ... In the
+# left frontal lobe it mainly involves the inferior frontal gyrus, pars opercularis (Broca's
+# area; 54% of it damaged) and the precentral gyrus (primary motor cortex; 4% of it damaged).
+#
+# By tissue it is cortico-subcortical: cortex (66%), white matter (26%), deep grey matter
+# (3%) and CSF spaces (3%). ...
 
 lqtpy.qc.check(les)                # [] -- or flags such as "drawn on some axial slices only"
 lqtpy.lesion_stats(les)            # volume, centre of mass, components, laterality, ...
@@ -58,6 +60,7 @@ once matters: the five calls above take about 50 ms together on a prepared lesio
 | `describe(lesion, profile=...)` | a plain-language `Description` (`.text`, `.sections`, `.facts`) |
 | `qc.check(lesion)` | quality flags (see below) |
 | `qc.repair_gaps(lesion)` | an interpolated **new** mask for gap-drawn lesions (opt-in) |
+| `tissue.locate(lesion)` | tissue composition, and a location class for each separate part |
 | `lesion_stats(lesion)` | volume, centre of mass, components, laterality, bounding box |
 | `atlas_overlap(lesion, atlas)` | one record per damaged region |
 | `atlas_coverage(lesion, atlas)` | labelled / unlabelled / outside-field-of-view shares |
@@ -73,7 +76,9 @@ grid. The part no region covers (usually white matter for a grey-matter atlas) i
 Bundled atlases: `aal` (116 regions), `schaefer` (100 parcels, Yeo-7 networks), `dk`
 (Mindboggle DKT31 + subcortical), `jhu` (48 white-matter structures, JHU ICBM-DTI-81) and
 `arterial` (vascular territories, Liu et al. 2023, with deep perforator territories such as
-the lenticulostriate). Every region carries a readable name, hemisphere, tissue class and,
+the lenticulostriate). A seventh, `tissue`, classifies every voxel as cortex, white
+matter, deep grey matter, ventricle, cerebellum, brainstem or CSF; it feeds the location
+words below rather than the region tables. Every region carries a readable name, hemisphere, tissue class and,
 where well established, a functional label (primary motor cortex, Broca's area, …). Register
 your own with `lqtpy.register_atlas(key, name, img, labels)`.
 
@@ -95,6 +100,42 @@ white-matter structures involved ("the posterior limb of the internal capsule").
 are marked: `Description.marked` wraps them in `**`, `Description.html()` renders them bold,
 and `.text` stays plain. Functional labels describe location only; the text never predicts
 symptoms.
+
+### Tissue and location classes
+
+`lqtpy.tissue.locate(lesion)` gives the lesion's tissue composition (cortex, white matter,
+deep grey matter, ventricles, cerebellum, brainstem, CSF, outside the brain) and a summary
+class: cortical, subcortical, cortico-subcortical or infratentorial. Each separate part also
+gets the location class used in MS and small-vessel reporting:
+
+| Class | Rule (checked in this order) |
+|---|---|
+| outside the brain | at least half outside the brain (usually a drawing artefact) |
+| infratentorial | at least half in the brainstem or cerebellum |
+| cortical | at least half in the cortex |
+| deep grey matter | at least half in the basal ganglia or thalamus |
+| periventricular | reaches the lateral ventricles |
+| juxtacortical | white matter reaching the cortex |
+| deep white matter | white matter touching neither |
+
+"Reaches" means within 3 mm (`contact_mm`) in the MNI template: masks drawn on a patient's
+scan and warped to MNI don't line up with the template to the millimetre, so a strict
+"touching" test would miss real contact. For the same reason the text groups cortical and
+juxtacortical together, as the 2017 McDonald criteria do. A thalamic or caudate lesion next
+to the ventricle is "deep grey matter", not "periventricular". The `small_vessel` and
+`research` descriptions use these classes for each part; `stroke` and `tumour` describe each
+part as cortical, subcortical, cortico-subcortical or infratentorial instead (a large infarct
+that touches the ventricle isn't usefully called "periventricular").
+
+The description uses these classes: "By tissue it is **cortico-subcortical**: cortex (53%),
+white matter (35%) and deep grey matter (8%)"; a single small subcortical lesion is called
+"lacunar-sized" (under 20 mm across, a size description, not a diagnosis); the
+`small_vessel` profile counts lesions by location ("By location: **12 periventricular**,
+5 cortical or juxtacortical and 4 in deep white matter"). The part of a lesion no atlas
+names is broken down too ("44% of it lies outside the named structures: 20% in cortex just
+outside the named regions, 19% in unnamed white matter, ..."). The template's cortical
+ribbon is wider than the DKT regions, which is why cortex is often the largest share there. Results carry `result["tissue"]`, single runs write a
+`<name>_parts.csv`, and the group subject table gains tissue columns.
 
 ### Quality checks
 
@@ -149,6 +190,11 @@ headless Edge/Chrome/Chromium already on the machine (or WeasyPrint if installed
 specific view with `report.html#clinical` or `#light`. Group reports link to one full
 report per subject and give, per region, subjects affected, the cohort-wide mean (unaffected
 subjects count as 0), the mean among affected subjects, and the maximum.
+
+Every table sorts by clicking a column header (again to reverse). In group reports the
+subjects list scrolls inside its own card, with a fixed header, once there are more than 12
+subjects. Brain figures are drawn twice: on black for the dark dashboard and on white for
+light mode, the clinical report and the PDF.
 
 To embed sections in your own page instead, use `lqtpy.report.fragments` — every rule is
 scoped to `lqt-` classes, so the fragments survive being dropped into a page that has its own

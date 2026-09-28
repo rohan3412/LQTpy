@@ -46,8 +46,17 @@ def test_core_and_extras_marked(report):
 
 def test_images_embedded_once(report):
     res, page = report
-    assert page.count(res["glass_uri"][:200]) == 1          # clinical view borrows by id
+    assert page.count(res["glass_uri"]) == 1                 # clinical view borrows by id
+    assert page.count(res["glass_uri_light"]) == 1
     assert 'data-src-from="img-glass"' in page
+    # The clinical view / PDF borrow the white-background version.
+    assert f'id="img-glass" src="{res["glass_uri_light"][:60]}' in page
+
+
+def test_sortable_tables_and_light_plates(report):
+    _, page = report
+    assert 'th.sortable' in page and "aria-sort" in page
+    assert 'class="plate light"' in page
 
 
 def test_to_pdf(report, tmp_path):
