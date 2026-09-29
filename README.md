@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
-  <img src="docs/assets/banner-light.svg" alt="Lcutiepie (lqtpy)" width="720">
+  <img src="docs/assets/banner-light.svg" alt="LQTpy" width="720">
 </picture>
 
 `lqtpy` measures what a brain lesion has damaged, and says so in plain language. Give it a
@@ -19,11 +19,15 @@ mask), retinotopy, or the original method's parcel-to-parcel and shortest-path m
 ## Install
 
 ```bash
-pip install .            # core
-pip install ".[all]"     # + pandas frames, matplotlib/nilearn/ggseg figures, HTML reports
+pip install .              # core: numpy, scipy, nibabel -- reports included
+pip install ".[report]"    # + the scroll-through slice viewer (nilearn) and subcortical map (ggseg)
+pip install ".[formats]"   # + DICOM-SEG input (highdicom); NRRD and MGZ need nothing
+pip install ".[all]"       # + pandas frames, merged PDF bundles
 ```
 
-Atlases ship inside the package, so everything except tract disconnection works offline.
+Atlases ship inside the package, so everything except tract disconnection and the optional
+cerebellar atlas works offline. Template maps (distance maps, border zones) are built once
+per installation and cached (`lqtpy cache` shows where).
 
 ## Usage
 
@@ -33,59 +37,74 @@ import lqtpy
 les = lqtpy.prepare("lesion_MNI.nii.gz")   # load and binarize once, reuse everywhere
 
 print(lqtpy.describe(les))
-# A single 14 cm³ lesion in the left hemisphere.
+# A single 15.6 cm³ lesion in the left hemisphere.
 #
-# It involves the left frontal lobe (26%), insula (19%) and deep grey nuclei (3%). ... In the
-# left frontal lobe it mainly involves the inferior frontal gyrus, pars opercularis (Broca's
-# area; 54% of it damaged) and the precentral gyrus (primary motor cortex; 4% of it damaged).
+# It involves the left frontal lobe (23%), insula (16%), deep grey matter (2%) and parietal
+# lobe (2%). ... In the left frontal lobe it mainly involves the inferior frontal gyrus, pars
+# opercularis (Broca's area; 52% of it damaged) ...
 #
-# By tissue it is cortico-subcortical: cortex (66%), white matter (26%), deep grey matter
-# (3%) and CSF spaces (3%). ...
+# It lies in the left middle cerebral artery (MCA) territory (100%): mainly its frontal part
+# (58%) and insular part (29%), with 9% in the lateral lenticulostriate (deep perforator)
+# territory.
+#
+# It reaches the left Broca's area, left arcuate fasciculus, left corticospinal tract and left
+# primary motor cortex; the left primary auditory cortex is 2 mm away.
 
 lqtpy.qc.check(les)                # [] -- or flags such as "drawn on some axial slices only"
 lqtpy.lesion_stats(les)            # volume, centre of mass, components, laterality, ...
 lqtpy.atlas_overlap(les, "aal")    # one record per damaged region
-lqtpy.atlas_coverage(les, "aal")   # how much of the lesion the atlas labels at all
-lqtpy.lobe_overlap(les, "dk")      # the same, grouped by lobe
+lqtpy.watershed.border_zones(les)  # share in arterial border zones
+lqtpy.structures.distances(les)    # mm to the corticospinal tract, arcuate, motor cortex, ...
 ```
 
-A lesion can be a path, a nibabel image, an `(array, affine)` tuple, or a `PreparedLesion`.
-A voxel counts as lesioned when its value is **strictly greater** than `threshold` (0.5), and
-the mask is resampled onto each atlas grid with nearest-neighbour interpolation. Preparing
-once matters: the five calls above take about 50 ms together on a prepared lesion.
+A lesion can be a path (`.nii`, `.nii.gz`, `.mgz`, `.nrrd`, `.nhdr`, DICOM-SEG `.dcm`), a
+nibabel image, an `(array, affine)` tuple, or a `PreparedLesion`. A voxel counts as lesioned
+when its value is **strictly greater** than `threshold` (0.5), and the mask is resampled onto
+each atlas grid with nearest-neighbour interpolation.
 
 | Function | Returns |
 |---|---|
 | `prepare(lesion)` | a `PreparedLesion`: loaded once, cached resampling per atlas grid |
 | `describe(lesion, profile=...)` | a plain-language `Description` (`.text`, `.sections`, `.facts`) |
 | `qc.check(lesion)` | quality flags (see below) |
-| `qc.repair_gaps(lesion)` | an interpolated **new** mask for gap-drawn lesions (opt-in) |
+| `qc.repair_gaps(lesion)` / `qc.clean(lesion)` | a **new** repaired / cleaned mask (opt-in) |
+| `qc.check_folder(folder)` / `qc.clean_folder(src, dst)` | the same for a folder; cleaning writes copies |
 | `tissue.locate(lesion)` | tissue composition, and a location class for each separate part |
+| `watershed.border_zones(lesion)` | share in the ACA-MCA, MCA-PCA, ACA-PCA and internal border zones |
+| `structures.distances(lesion)` | shortest distance (mm) to key tracts and cortical areas |
+| `structures.cross_section_load(lesion)` | how much of each tract's cross-section the lesion covers |
+| `mirror.homologue(lesion)` | regions under the lesion's mirror image in the other hemisphere |
 | `lesion_stats(lesion)` | volume, centre of mass, components, laterality, bounding box |
 | `atlas_overlap(lesion, atlas)` | one record per damaged region |
 | `atlas_coverage(lesion, atlas)` | labelled / unlabelled / outside-field-of-view shares |
-| `network_rollup_for(lesion, atlas)` | the same, grouped by the atlas's region groups |
-| `lobe_overlap(lesion, atlas)` | the same, grouped by anatomical lobe |
+| `network_rollup_for(lesion, atlas)` / `lobe_overlap(lesion, atlas)` | grouped by network or lobe |
 | `tract_proxy_overlap(lesion)` | voxel overlap with tract masks — a coarse proxy, **not** disconnection |
 | `tract_disconnection(lesion)` | percent of each tract's streamlines cut by the lesion |
 
 `PercentOfLesion` has one meaning everywhere: the share of *all* lesion voxels on the atlas
-grid. The part no region covers (usually white matter for a grey-matter atlas) is reported by
-`atlas_coverage` as `PercentUnlabelled`, so region rows plus the unlabelled share add up to 100.
+grid; `atlas_coverage` reports the part no region covers as `PercentUnlabelled`.
 
 Bundled atlases: `aal` (116 regions), `schaefer` (100 parcels, Yeo-7 networks), `dk`
-(Mindboggle DKT31 + subcortical), `jhu` (48 white-matter structures, JHU ICBM-DTI-81) and
-`arterial` (vascular territories, Liu et al. 2023, with deep perforator territories such as
-the lenticulostriate). A seventh, `tissue`, classifies every voxel as cortex, white
-matter, deep grey matter, ventricle, cerebellum, brainstem or CSF; it feeds the location
-words below rather than the region tables. Every region carries a readable name, hemisphere, tissue class and,
-where well established, a functional label (primary motor cortex, Broca's area, …). Register
-your own with `lqtpy.register_atlas(key, name, img, labels)`.
+(Mindboggle DKT31 + subcortical), `jhu` (48 white-matter structures) and `arterial`
+(vascular territories, Liu et al. 2023, with deep perforator territories). `tissue` classifies
+every voxel (cortex, white matter, deep grey matter, ventricle, cerebellum, brainstem, CSF)
+for the location words. `lqtpy fetch suit` downloads the cerebellar lobule atlas (Diedrichsen
+2009) for `--atlas suit`. Register your own with `lqtpy.register_atlas(key, name, img, labels)`.
+
+### One vocabulary
+
+Every output uses the same words and numbers: volumes in cm³ with one rounding rule
+(15.6 cm³, 0.42 cm³), quality as **OK / Note / Check / Problem**, "deep grey matter" (short
+"deep GM") for the basal ganglia and thalamus, and territories as `L MCA` / `R PCA` /
+`bilateral VB` in tiles and tables but "the left middle cerebral artery (MCA) territory" in
+text. The midline share is always shown (a brainstem lesion is "on the midline (brainstem),
+45% left, 45% right, 9% on the midline"); a lesion straddling one territory on both sides is
+one bilateral territory.
 
 ### Descriptions
 
-`describe()` builds structured facts (hemisphere → lobe → region, then each separate part of
-the lesion) and renders them with deterministic templates. Pick a `profile`:
+`describe()` builds structured facts (hemisphere → lobe → region, then each separate part)
+and renders them with deterministic templates. Pick a `profile`:
 
 | Profile | For |
 |---|---|
@@ -94,19 +113,18 @@ the lesion) and renders them with deterministic templates. Pick a `profile`:
 | `tumour` | one dominant mass; midline crossing, ventricle involvement |
 | `research` | neutral anatomical wording, lower mention thresholds |
 
-Descriptions name the vascular territory ("the left middle cerebral artery (MCA) territory
-(86%): almost entirely its lateral lenticulostriate (deep perforator) territory (86%)") and the
-white-matter structures involved ("the posterior limb of the internal capsule"). Key findings
-are marked: `Description.marked` wraps them in `**`, `Description.html()` renders them bold,
-and `.text` stays plain. Functional labels describe location only; the text never predicts
-symptoms.
+Sections: summary, location, tissue, vascular territory (with border zones when the location
+fits a watershed pattern), nearby structures (tracts and cortical areas the lesion reaches or
+comes within 5 mm of), functional areas, networks, shape (extra) and quality notes. Key
+findings are marked (`Description.marked`, `Description.html()`); functional labels describe
+location only and never predict symptoms. "Lacunar-sized" means one subcortical part at most
+20 mm across **and** at most 1.5 cm³.
 
 ### Tissue and location classes
 
-`lqtpy.tissue.locate(lesion)` gives the lesion's tissue composition (cortex, white matter,
-deep grey matter, ventricles, cerebellum, brainstem, CSF, outside the brain) and a summary
-class: cortical, subcortical, cortico-subcortical or infratentorial. Each separate part also
-gets the location class used in MS and small-vessel reporting:
+`lqtpy.tissue.locate(lesion)` gives tissue composition and a summary class (cortical,
+subcortical, cortico-subcortical, infratentorial); each separate part gets the MS /
+small-vessel location class:
 
 | Class | Rule (checked in this order) |
 |---|---|
@@ -118,110 +136,153 @@ gets the location class used in MS and small-vessel reporting:
 | juxtacortical | white matter reaching the cortex |
 | deep white matter | white matter touching neither |
 
-"Reaches" means within 3 mm (`contact_mm`) in the MNI template: masks drawn on a patient's
-scan and warped to MNI don't line up with the template to the millimetre, so a strict
-"touching" test would miss real contact. For the same reason the text groups cortical and
-juxtacortical together, as the 2017 McDonald criteria do. A thalamic or caudate lesion next
-to the ventricle is "deep grey matter", not "periventricular". The `small_vessel` and
-`research` descriptions use these classes for each part; `stroke` and `tumour` describe each
-part as cortical, subcortical, cortico-subcortical or infratentorial instead (a large infarct
-that touches the ventricle isn't usefully called "periventricular").
+"Reaches" means within 3 mm in the MNI template (warped masks don't line up to the
+millimetre).
 
-The description uses these classes: "By tissue it is **cortico-subcortical**: cortex (53%),
-white matter (35%) and deep grey matter (8%)"; a single small subcortical lesion is called
-"lacunar-sized" (under 20 mm across, a size description, not a diagnosis); the
-`small_vessel` profile counts lesions by location ("By location: **12 periventricular**,
-5 cortical or juxtacortical and 4 in deep white matter"). The part of a lesion no atlas
-names is broken down too ("44% of it lies outside the named structures: 20% in cortex just
-outside the named regions, 19% in unnamed white matter, ..."). The template's cortical
-ribbon is wider than the DKT regions, which is why cortex is often the largest share there. Results carry `result["tissue"]`, single runs write a
-`<name>_parts.csv`, and the group subject table gains tissue columns.
+### Border zones, distances, cross-sections, mirror image
+
+- **Border zones** (`lqtpy.watershed`): the strips where two arterial territories meet
+  (ACA-MCA, MCA-PCA, ACA-PCA: cortex and the white matter within 10 mm of it) and the
+  internal border zone in the deep white matter between the lenticulostriate and superficial
+  MCA supply. The description says a location *fits* a border-zone (watershed) pattern when
+  at least half the lesion lies in the zones, or three or more parts line up along the
+  internal zone. Zones come from the territory atlas and are approximate.
+- **Distances** (`lqtpy.structures.distances`): mm to the corticospinal tracts, arcuate
+  fasciculi, optic radiations, primary motor and auditory cortex, and Broca's area (and its
+  right homologue); 0 means the lesion reaches it.
+- **Cross-section load** (`cross_section_load`): voxel overlap under-rates a lesion that cuts
+  a narrow part of a tract. Each tract is cut into 1 mm slabs along its main axis; reports
+  show the largest share of any slab covered, and the share of its narrowest slab.
+- **Mirror image** (`lqtpy.mirror`): the lesion flipped across the midline, and the regions
+  under it. The homologous region is used as an intact control region and in recovery
+  research (e.g. the right-hemisphere homologue of Broca's area in aphasia).
 
 ### Quality checks
 
-`qc.check()` flags masks that would give misleading numbers, tuned for MNI-space masks where
-a warp has smeared the artefacts: drawn on some slices only (`sparse_slices`), drawn on a
-single slice (`flat`), an outline never filled in (`hollow`), fragments left on the outermost
-slice of the image by drawing/export tools (`edge_artifact`), stray specks, meaningful volume
-outside the brain (a rim of overdrawing is ignored; the ventricles count as brain), a mask
-that isn't in MNI space, header problems, and — only if you pass `expected_side` — a
-left/right mismatch. Nothing is changed unless you ask: `qc.repair_gaps()` interpolates
-gap-drawn masks and `qc.clean()` removes edge artefacts and specks, each returning a new
-mask. Gap-drawn slabs are counted as one lesion in descriptions.
+`qc.check()` flags masks that would give misleading numbers, tuned for MNI-space masks where a
+warp has smeared the artefacts: drawn on some slices only (`sparse_slices`), a single slice
+(`flat`), an unfilled outline (`hollow`), fragments on the image edge (`edge_artifact`), stray
+specks, volume outside the brain, a mask not in MNI space, header problems, and a left/right
+mismatch when the expected side is known. Nothing is changed unless you ask. Checked on 1,231
+real clinical masks.
 
-Checked on a clinical database of 1,231 real MNI masks: every mask ran without error, and a
-visual review of flagged and unflagged samples found the sparse-slice and single-slice flags
-correct. 28% of those masks carried image-edge artefacts, up to 1.2 cm³ each.
+**Native space**: gaps are clearest on the scan the mask was drawn on. Pass the native mask as
+well (`analyze_single(mni_mask, native=native_mask)`) and the drawing checks run there; or
+pass only the native mask and its transform (`transform=` a 4x4 native-to-MNI matrix in mm, or
+an SPM-style deformation field) and LQTpy warps it for you (`lqtpy.native.warp_to_mni`,
+`lqtpy warp`).
 
 ### Core and extras
 
-Core (always available, fast enough for a web request) covers everything above. **Extras**
-are measures registered in `lqtpy.registry`: the built-in `shape` extra (surface area,
-sphericity, surface regularity, solidity, principal axes) comes with plain-word
-interpretations ("elongated front-to-back, with a lobulated outline"). Word bands were set on
-synthetic reference shapes, and a reference built from 898 real lesions adds size-matched
-context when a lesion is unusual ("more lobulated than 90% of similar-sized reference
-lesions"); only aggregate percentiles are shipped. Plugins add more
-through the `lqtpy.measures` / `lqtpy.atlases` entry points:
+Core covers everything above. **Extras** are measures in `lqtpy.registry`: the built-in
+`shape` extra (surface area, sphericity, solidity, principal axes) with plain-word
+interpretations calibrated on 898 real lesions. Plugins add more through the
+`lqtpy.measures` / `lqtpy.atlases` entry points; `lqtpy new-plugin fractal` writes a
+ready-to-install package (pyproject with the entry point, `compute()`, `interpret()`, tests).
+A plugin that fails to import is reported as unavailable; it never breaks core. Extras are
+off by default everywhere (`extras="all"` / `--extras all` to add them).
 
-```toml
-# pyproject.toml of a plugin package
-[project.entry-points."lqtpy.measures"]
-fractal = "lqtpy_fractal:MEASURES"
-```
-
-A plugin that fails to import is reported as unavailable; it never breaks core.
-
-### Reports
+## Reports
 
 ```python
-lqtpy.analyze_single("lesion_MNI.nii.gz", out_dir="out", plots=True, extras="all")
-lqtpy.analyze_group("lesions/", out_dir="out", plots=True)   # + one report per subject
+lqtpy.analyze_single("lesion_MNI.nii.gz", out_dir="out", plots=True)
+lqtpy.analyze_group("lesions/", out_dir="out", plots=True, metadata="subjects.csv",
+                    compare="aphasia", n_jobs=4)
 ```
 
-Every result carries a `manifest` saying which modules ran, which were skipped or
-unavailable, and why. Each report is one self-contained HTML file with two views, switched
-from its toolbar: a **dashboard** (dark by default, with a light mode) that puts key numbers,
-the description, quality flags and figures first and keeps atlas tables collapsed below; and
-a **clinical report**, a paper-style document that is also what the **Export PDF** button
-prints. Extras appear in their own, visually separate section. Save a PDF from code with
-`lqtpy.report.to_pdf(result["report_path"])` or `analyze_single(..., pdf=True)`; it uses a
-headless Edge/Chrome/Chromium already on the machine (or WeasyPrint if installed). Open a
-specific view with `report.html#clinical` or `#light`. Group reports link to one full
-report per subject and give, per region, subjects affected, the cohort-wide mean (unaffected
-subjects count as 0), the mean among affected subjects, and the maximum.
+Each report is **one self-contained HTML file** with a **dashboard** (dark, with a light mode)
+and a **clinical report** (a paper-style document, also what **Export PDF** prints). Figures
+are drawn with numpy as themeable vector graphics; a full report takes under a second.
 
-Every table sorts by clicking a column header (again to reverse). In group reports the
-subjects list scrolls inside its own card, with a fixed header, once there are more than 12
-subjects. Brain figures are drawn twice: on black for the dark dashboard and on white for
-light mode, the clinical report and the PDF.
+- Key numbers, the description (with **Copy text** and glossary popovers for terms such as
+  periventricular, lacunar-sized or border zone), quality flags, glass-brain projections and
+  slices, and a **scroll-through slice viewer**.
+- Where the lesion is: share of the lesion, most damaged structures, territories and border
+  zones, nearby structures.
+- Atlas tables with vector region maps: **hover a table row to find the region on the map**,
+  and back. Every table sorts by any column and **remembers its sort**.
+- Tracts (voxel overlap and cross-section load), disconnection, the mirror image, extras.
+- **Download tables**: the report carries its own CSVs, plus `data_dictionary.csv` explaining
+  every column and unit (also written next to every output).
+- **About this report**: what ran and why not, versions, input checksums, and the command
+  that repeats the analysis.
 
-To embed sections in your own page instead, use `lqtpy.report.fragments` — every rule is
-scoped to `lqt-` classes, so the fragments survive being dropped into a page that has its own
-CSS:
+Group reports add a subjects table with **thumbnails** and metadata columns, a **search box
+and filter chips** (quality, territory, tissue, metadata groups) that recompute the cohort
+bars, **cohort checks** (duplicate masks, outliers, unmatched metadata), a summary per
+`group_by` group, overlap maps and, with `compare=`, a **two-group comparison** (overlap maps
+side by side, per-region Fisher and Mann-Whitney tests with FDR q-values: screening
+statistics, not lesion-symptom mapping). One full report per subject is linked from the group
+table. `pdf="bundle"` also writes every subject's PDF and, with `pypdf`, one merged PDF with
+bookmarks.
 
-```python
-from lqtpy.report import fragments
-html = fragments.stylesheet() + fragments.parcel_damage_fragment(records, "AAL")
-```
+### Group options
 
-`ReportStyle` controls theme colours, which sections appear and in what order, units and
-precision, and a detail-level preset.
+| Option | What it does |
+|---|---|
+| `metadata="subjects.csv"` | one row per subject (age, condition, side, scores), joined into tables and filters |
+| `group_by="condition"` | summary per group |
+| `compare="aphasia"` or `("aphasia", "yes", "no")` | two-group comparison |
+| a side column (`lesion_side`, or `symptom_side` = opposite) | left/right flip check per subject |
+| `anonymise=True` | IDs (`sub-0001`) instead of names everywhere; a private key file maps them back |
+| `n_jobs=4` | parallel workers (on Windows, run from under `if __name__ == "__main__":`) |
+| `incremental=True` | reuse cached results for unchanged files and settings |
 
-### Command line
+### Reproducibility
+
+Every report embeds a run record: versions, settings and each input's SHA-256.
+`lqtpy rerun report.html` repeats the analysis; moved inputs are found by checksum with
+`--search FOLDER`, and a changed file is refused unless `--allow-changed`.
+
+## Command line
 
 ```bash
-lqtpy single lesion_MNI.nii.gz -o out          # full report
-lqtpy group lesions/ -o out                    # group report + one report per subject
-lqtpy describe lesion_MNI.nii.gz --profile stroke
-lqtpy qc lesion_MNI.nii.gz
-lqtpy repair lesion_MNI.nii.gz -o repaired.nii.gz
-lqtpy clean lesion_MNI.nii.gz -o clean.nii.gz  # remove image-edge artefacts and specks
+lqtpy single lesion.nii.gz -o out              # full report
+lqtpy group lesions/ -o out -m subjects.csv --compare aphasia -j 4
+lqtpy describe lesion.nii.gz --profile stroke
+lqtpy qc lesion.nii.gz                         # flags for one mask
+lqtpy qc lesions/ --clean-to cleaned/          # one page for a folder; cleaned copies
+lqtpy repair lesion.nii.gz -o repaired.nii.gz  # interpolate gap-drawn masks (new file)
+lqtpy warp native.nii.gz --transform T.txt -o mni.nii.gz
+lqtpy rerun out/lesion_report.html
+lqtpy watch incoming/ -o out                   # rebuild the group report as masks arrive
+lqtpy serve                                    # upload page for colleagues without Python
+lqtpy new-plugin fractal                       # starter package for an extra measure
+lqtpy fetch suit                               # cerebellar lobule atlas
 ```
 
-`single`/`group` accept `--pdf`, `--profile`, `--extras all|none|name,...`, `--no-qc`,
-`--no-describe`, `--no-tracts` and `--no-disconnection`. Errors print one line and exit with
-2 (bad input) or 1 (environment).
+Output is plain, aligned text (colour only for the quality word, and only in a terminal);
+`--quiet` prints just the report path. Errors print one line and exit with 2 (bad input) or
+1 (environment).
+
+**Settings file**: defaults for atlases, profile, extras, output folder, threshold, workers
+and more go in `lqtpy.toml` (current folder, `LQTPY_CONFIG`, or the user config folder;
+`lqtpy config` shows which is used). The command line wins over the file; the Python API
+ignores it.
+
+```toml
+[defaults]
+atlases = ["aal", "dk", "arterial"]
+profile = "stroke"
+out_dir = "D:/lesion_reports"
+jobs = 4
+```
+
+**Web front end**: `lqtpy serve` starts an upload page on `http://localhost:8765` (this
+computer only unless `--host`); a colleague uploads a mask and gets the report back. Uploads
+are anonymised and deleted straight after.
+
+## Documentation
+
+`python tools/build_docs.py` builds a documentation site (`docs/site/`: overview, command-line
+reference, Python API from the docstrings) and an example gallery (`docs/gallery/`: a stroke,
+small-vessel disease and a tumour report from synthetic lesions). `python tools/bench.py`
+prints the latency table; `python tools/visual_check.py` compares report screenshots with
+`tests/visual/baseline/` (`LQTPY_VISUAL=1 pytest` runs it as a test).
+
+Result dictionaries use snake_case keys; table columns keep the CamelCase names of the
+original toolkit's outputs (`PercentDamage`, `RegionName`), so existing CSV readers keep
+working.
 
 ## Tract disconnection
 
@@ -254,6 +315,8 @@ they go:
   [CC BY-SA 4.0](https://brain.labsolver.org/hcp_trk_atlas.html); using it also requires
   acknowledging the [HCP data use terms](https://www.humanconnectome.org/study/hcp-young-adult/document/wu-minn-hcp-consortium-open-access-data-use-terms)
 - **AAL** and **Schaefer-2018** — free for academic use with citation
+- **SUIT cerebellar lobules** (optional, `lqtpy fetch suit`) — Diedrichsen et al. 2009, downloaded
+  from the DiedrichsenLab `cerebellar_atlases` repository; academic use with citation
 
 Per-file provenance and checksums are in
 [lqtpy/data/atlases/SOURCE.md](lqtpy/data/atlases/SOURCE.md).

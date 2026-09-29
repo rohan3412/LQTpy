@@ -11,7 +11,8 @@ from .analysis import analyze_single, analyze_group
 from .api import (atlas_coverage, atlas_overlap, lesion_stats, lobe_overlap,
                   network_rollup_for, tract_disconnection, tract_proxy_overlap)
 from .prepared import PreparedLesion, prepare
-from . import qc, registry, tissue
+from . import (cohort, formats, metadata, mirror, native, qc, registry, repro, structures,
+               tissue, watershed)
 from .describe import Description, describe
 from .atlases import (RegionMeta, atlas_from_arrays, cache_clear,
                       list_atlases, load_atlas, preload, register_atlas)
@@ -30,6 +31,8 @@ __all__ = [
     "prepare", "PreparedLesion",
     # Quality control, descriptions, plugin registry
     "qc", "tissue", "describe", "Description", "registry",
+    # Locations, cohorts, inputs, reproducibility
+    "watershed", "structures", "mirror", "cohort", "metadata", "formats", "native", "repro",
     "lesion_stats", "atlas_overlap", "atlas_coverage", "network_rollup_for",
     "lobe_overlap", "tract_proxy_overlap", "tract_disconnection",
     # Atlas registry + host-application atlas bridging

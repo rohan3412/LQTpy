@@ -19,7 +19,7 @@ import nibabel as nib
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 warnings.filterwarnings("ignore")
 import lqtpy  # noqa: E402
-from lqtpy import api, qc  # noqa: E402
+from lqtpy import api, figures, qc  # noqa: E402,F401
 from lqtpy.describe import describe  # noqa: E402
 
 AFF = np.array([[-1.0, 0, 0, 90], [0, 1, 0, -126], [0, 0, 1, -72], [0, 0, 0, 1]])
@@ -58,7 +58,13 @@ def main():
         ("tract_proxy_overlap", lambda: api.tract_proxy_overlap(L)),
         ("qc.check", lambda: qc.check(L)),
         ("tissue.locate", lambda: lqtpy.tissue.locate(L)),
+        ("watershed.border_zones", lambda: lqtpy.watershed.border_zones(L)),
+        ("structures.distances", lambda: lqtpy.structures.distances(L)),
+        ("structures.cross_section_load", lambda: lqtpy.structures.cross_section_load(L)),
+        ("mirror.homologue", lambda: lqtpy.mirror.homologue(L)),
         ("describe (stroke, no shape)", lambda: describe(L)),
+        ("figures: glass brain + slices", lambda: (lqtpy.figures.glass_brain_svg(L),
+                                                    lqtpy.figures.slices_svg(L))),
     ]
 
     def panel():
@@ -76,6 +82,12 @@ def main():
     t = time.perf_counter()
     lqtpy.analyze_single(L, write=False)
     print(f"{'analyze_single (core, no plots)':38s} {1000 * (time.perf_counter() - t):10.1f}")
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        lqtpy.analyze_single(L, out_dir=d, plots=True)   # warm the figure caches
+        t = time.perf_counter()
+        lqtpy.analyze_single(L, out_dir=d, plots=True)
+        print(f"{'analyze_single + full report':38s} {1000 * (time.perf_counter() - t):10.1f}")
 
 
 if __name__ == "__main__":

@@ -46,17 +46,18 @@ def test_core_and_extras_marked(report):
 
 def test_images_embedded_once(report):
     res, page = report
-    assert page.count(res["glass_uri"]) == 1                 # clinical view borrows by id
-    assert page.count(res["glass_uri_light"]) == 1
-    assert 'data-src-from="img-glass"' in page
-    # The clinical view / PDF borrow the white-background version.
-    assert f'id="img-glass" src="{res["glass_uri_light"][:60]}' in page
+    # One inline SVG per figure serves both themes; the clinical view (and
+    # the PDF) copy it by id instead of embedding it again.
+    first_png = res["glass_svg"].split('href="', 1)[1][:80]
+    assert page.count(first_png) == 1
+    assert 'data-copy-from="fig-glass"' in page and 'id="fig-glass"' in page
 
 
-def test_sortable_tables_and_light_plates(report):
+def test_sortable_tables_and_themed_plates(report):
     _, page = report
     assert 'th.sortable' in page and "aria-sort" in page
-    assert 'class="plate light"' in page
+    assert "--plate:#fff" in page and "--plate:#000" in page   # plate follows the theme
+    assert "lqtpy.sort." in page                               # sort order remembered
 
 
 def test_to_pdf(report, tmp_path):

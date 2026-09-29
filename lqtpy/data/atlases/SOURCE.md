@@ -226,3 +226,18 @@ No separate file: `lqtpy.qc.brain_mask()` is built at run time from the bundled 
 DKT31+CMA volumes (union, hole-filled, dilated 2 voxels). nilearn's MNI152 brain mask was
 considered; it derives from the ICBM 2009a template (Dice 0.954 with this mask) whereas
 lesion masks here are usually on the FSL MNI152 grid the bundled atlases use.
+
+## SUIT cerebellar lobules (optional download, not bundled)
+
+`lqtpy fetch suit` downloads `atl-Anatom_space-MNI_dseg.nii` and `atl-Anatom.tsv` from
+https://github.com/DiedrichsenLab/cerebellar_atlases (folder `Diedrichsen_2009`) into
+`<LQTPY_DATA_HOME>/suit/`, and records their SHA-256 digests in `SHA256SUMS` there.
+28 lobules (hemispheric and vermal) and 6 deep nuclei, MNI space. Cite: Diedrichsen J,
+Balsters JH, Flavell J, Cussans E, Ramnani N. A probabilistic MR atlas of the human
+cerebellum. NeuroImage 46(1):39-46, 2009. Academic use with citation.
+
+## Derived maps (not files in the package)
+
+Border zones (`lqtpy.watershed`) are derived from the arterial atlas and the tissue map;
+key-structure distance maps (`lqtpy.structures`) from the HCP842 tract masks and DKT
+regions. Both are computed on first use and cached per installation (`lqtpy cache`).

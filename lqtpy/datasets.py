@@ -171,11 +171,10 @@ def discon_index_cache_clear() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Generic verified-download helper, for future fetch-on-demand data (not
-# currently used by anything -- there is no public URL to fetch the
-# disconnection index from yet, see get_discon_index_path()'s docstring).
+# Verified download helper (used by fetch_suit; the disconnection index
+# has no public URL yet, see get_discon_index_path()'s docstring).
 # --------------------------------------------------------------------------- #
-def fetch(url: str, sha256: str, dest: str) -> str:
+def fetch(url: str, sha256: "str | None", dest: str) -> str:
     """Download ``url`` to ``dest``, verifying its sha256 digest, atomically.
 
     Streams to a temp file in ``dest``'s directory and ``os.replace``s it
@@ -183,11 +182,9 @@ def fetch(url: str, sha256: str, dest: str) -> str:
     (or a mismatched digest) never lands at ``dest``. Raises ``ValueError``
     on a digest mismatch and cleans up the temp file either way.
 
-    Not currently wired to anything: no public URL publishes the
-    disconnection index, and the bundled atlases/tract-overlap index ship as
-    package data instead. This exists so a future fetch-on-demand feature
-    doesn't have to re-solve atomic-verified-download from
-    scratch.
+    ``sha256=None`` skips the check (for sources that publish no digest;
+    the digest of what was downloaded is recorded next to it instead).
+    Used by :func:`fetch_suit`.
     """
     from urllib.request import urlopen
 
@@ -204,7 +201,7 @@ def fetch(url: str, sha256: str, dest: str) -> str:
                 fh.write(chunk)
                 digest.update(chunk)
         got = digest.hexdigest()
-        if got.lower() != sha256.lower():
+        if sha256 and got.lower() != sha256.lower():
             raise ValueError(
                 f"sha256 mismatch downloading {url}: expected {sha256}, got {got}")
         os.replace(tmp_path, dest)
@@ -217,7 +214,74 @@ def fetch(url: str, sha256: str, dest: str) -> str:
     return dest
 
 
+SUIT_BASE_URL = ("https://raw.githubusercontent.com/DiedrichsenLab/cerebellar_atlases/master/"
+                 "Diedrichsen_2009/")
+SUIT_FILES = ("atl-Anatom_space-MNI_dseg.nii", "atl-Anatom.tsv")
+
+
+def suit_dir() -> str:
+    return os.path.join(get_data_home(), "suit")
+
+
+def suit_available() -> bool:
+    return all(os.path.exists(os.path.join(suit_dir(), f)) for f in SUIT_FILES)
+
+
+def fetch_suit(base_url: str = SUIT_BASE_URL, *, force: bool = False) -> str:
+    """Download the cerebellar lobule atlas (Diedrichsen et al. 2009, MNI
+    space, 28 lobules + 6 deep nuclei; from the DiedrichsenLab
+    ``cerebellar_atlases`` repository) into ``<data home>/suit``. After
+    this, ``atlases=[..., "suit"]`` works. Returns the folder.
+
+    The atlas is academic data: cite Diedrichsen J, et al. NeuroImage
+    46(1):39-46, 2009, and check the repository's terms. The files' SHA-256
+    digests are written to ``SHA256SUMS`` beside them."""
+    d = suit_dir()
+    os.makedirs(d, exist_ok=True)
+    sums = []
+    for f in SUIT_FILES:
+        dest = os.path.join(d, f)
+        if force or not os.path.exists(dest):
+            fetch(base_url.rstrip("/") + "/" + f, None, dest)
+        h = hashlib.sha256(open(dest, "rb").read()).hexdigest()
+        sums.append(f"{h}  {f}")
+    with open(os.path.join(d, "SHA256SUMS"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(sums) + "\n")
+    from .atlases import _register_downloadable, cache_clear
+    cache_clear()
+    _register_downloadable()
+    return d
+
+
+def load_suit():
+    """``(image, labels)`` for the fetched SUIT atlas (the atlas loader)."""
+    import csv
+    import nibabel as nib
+    from .errors import DataUnavailableError
+    if not suit_available():
+        raise DataUnavailableError(
+            "The cerebellar lobule atlas (suit) isn't downloaded yet. Run "
+            "`lqtpy fetch suit` (or lqtpy.datasets.fetch_suit()) once.")
+    d = suit_dir()
+    labels = {}
+    with open(os.path.join(d, "atl-Anatom.tsv"), encoding="utf-8") as fh:
+        for r in csv.DictReader(fh, delimiter="\t"):
+            name = r["name"]
+            side = "L" if name.startswith("Left_") else "R" if name.startswith("Right_") else "Midline"
+            part = name.split("_", 1)[1] if "_" in name else name
+            nucleus = part in ("Dentate", "Interposed", "Fastigial")
+            disp = (f"{part.lower()} nucleus" if nucleus else
+                    f"lobule {part}".replace("lobule Crus", "crus ") if not name.startswith("Vermis")
+                    else f"vermis {part}".replace("vermis Crus", "vermis crus "))
+            labels[int(r["index"])] = {
+                "RegionName": name, "Group": "Cerebellum", "Lobe": "Cerebellum",
+                "DisplayName": disp, "Hemisphere": side,
+                "Tissue": "Deep grey matter" if nucleus else "Cerebellum"}
+    return nib.load(os.path.join(d, "atl-Anatom_space-MNI_dseg.nii")), labels
+
+
 __all__ = [
+    "fetch_suit", "load_suit", "suit_available", "SUIT_BASE_URL",
     "get_data_home", "get_discon_index_path", "discon_index_available",
     "preload_discon_index", "discon_index_cache_clear", "fetch",
     "get_tract_display_names", "FORMAT_VERSION",

@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gallery · LQTpy</title><style>
+:root{color-scheme:light dark;--bg:#f4f5f7;--panel:#fff;--ink:#121820;--ink2:#4a5361;--ink3:#5f6877;
+--line:#e3e6eb;--acc:#d9582a;--code:#f1f3f6;--link:#1f6fd1}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1015;--panel:#151a21;--ink:#e9edf2;--ink2:#b3bcc8;
+--ink3:#8f98a6;--line:rgba(255,255,255,.1);--acc:#f07a45;--code:#1b212a;--link:#7ab3ff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--link)}header{border-bottom:1px solid var(--line);padding:12px 24px;display:flex;gap:20px;
+align-items:center;flex-wrap:wrap}header b{font-size:17px;letter-spacing:.02em}header nav{display:flex;gap:16px}
+main{max-width:980px;margin:0 auto;padding:28px 24px 80px}
+h1{font-size:30px;margin:.2em 0 .4em;letter-spacing:-.01em}h2{font-size:21px;margin:1.6em 0 .5em;
+border-bottom:1px solid var(--line);padding-bottom:6px}h3{font-size:16px;margin:1.4em 0 .3em}
+code,pre{font-family:ui-monospace,"SF Mono",Consolas,monospace;font-size:13.5px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto}
+p code,li code,td code{background:var(--code);border-radius:5px;padding:1px 5px}
+.fn{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 18px 10px;margin:14px 0}
+.fn h3{font-family:ui-monospace,Consolas,monospace;font-size:14.5px;word-break:break-word}
+.fn .doc{white-space:pre-wrap;color:var(--ink2);font-size:14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h3{margin-top:0}.muted{color:var(--ink3)}table{border-collapse:collapse;width:100%}
+td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+</style></head><body><header><b>LQTpy</b><nav><a href="index.html">Overview</a><a href="cli.html">Command line</a><a href="api.html">Python API</a><a href="gallery.html">Gallery</a></nav></header><main><h1>Gallery</h1><p>Reports made from synthetic lesions (no patient data). Each is one self-contained file: switch between the dashboard and the clinical report, light and dark, or export a PDF.</p><div class="cards"><div class="card"><h3><a href="../gallery/stroke.html">Stroke (MCA territory)</a></h3><p class="muted">One cortico-subcortical lesion in the left middle cerebral artery territory: lobes, regions, functional labels, nearby tracts.</p></div><div class="card"><h3><a href="../gallery/small_vessel.html">Small-vessel disease</a></h3><p class="muted">Many small lesions: counts by location (periventricular, deep white matter, infratentorial) instead of a paragraph each.</p></div><div class="card"><h3><a href="../gallery/tumour.html">Tumour</a></h3><p class="muted">One large mass: where it is centred, what it extends into, midline crossing, shape extras.</p></div></div></main></body></html>

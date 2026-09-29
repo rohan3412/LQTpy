@@ -1,10 +1,80 @@
 # Changelog
 
-## 0.5.0 (unreleased)
+## 0.5.0 (2026-09-29)
 
-Implements Phases 0–7 of [docs/ROADMAP.md](docs/ROADMAP.md).
+Implements Phases 0–7 of [docs/ROADMAP.md](docs/ROADMAP.md), then the design and consistency
+review and the ideas inbox (listed first below).
 
-### New
+### New since the roadmap phases
+- **One vocabulary** (`lqtpy/_format.py`): volumes always in cm³ with one rounding rule;
+  quality words OK / Note / Check / Problem everywhere (tiles, tables, CSV, CLI, PDF);
+  "deep grey matter" (short "deep GM") instead of Subcortical / deep grey nuclei; territories
+  as `L MCA` in tiles and tables, "the left middle cerebral artery (MCA) territory" in text.
+- **Descriptions**: the midline share is never dropped ("on the midline (brainstem), 45% left,
+  45% right, 9% on the midline"); a lesion straddling one territory is one bilateral territory;
+  "lacunar-sized" also needs at most 1.5 cm³; unnamed tissue is split into unnamed white
+  matter, cortex outside named regions, CSF spaces and outside the brain in every table;
+  "Main location" is the largest compartment; no more "in the brainstem it mainly involves the
+  brainstem"; the ACA's cortical part reads "cortical branches".
+- **Border zones** (`lqtpy.watershed`): ACA-MCA, MCA-PCA, ACA-PCA cortical and internal
+  border zones; the description says when a location fits a watershed pattern.
+- **Key structures** (`lqtpy.structures`): distance in mm to the corticospinal tracts, arcuate
+  fasciculi, optic radiations, primary motor and auditory cortex and Broca's area (and its
+  homologue); **tract cross-section load** (largest share of a 1 mm cross-section covered, and
+  of the narrowest one). New "Nearby structures" description section and report card.
+- **Mirror image** (`lqtpy.mirror`): the homologous region in the other hemisphere.
+- **Figures without matplotlib** (`lqtpy.figures`): glass brain, slices, overlap maps and
+  thumbnails drawn with numpy as themeable inline SVG; region maps are vector graphics. A
+  report with figures went from ~8 s to under 1 s; `plots=True` no longer needs matplotlib,
+  nilearn or pandas.
+- **Reports**: six tiles (Volume and Parts merged into Size) that fit; Copy text for the
+  description; glossary popovers; a scroll-through slice viewer (brainsprite); table rows and
+  map regions highlight each other; sort order remembered per table; the report's own CSVs
+  downloadable from inside it; a reproducibility block with checksums and the rerun command;
+  skip link, landmarks, labelled figures; a colour-blind-checked palette (left blue, right
+  teal: tested under protanopia, deuteranopia and tritanopia).
+- **Group runs**: subject metadata (`metadata=`, joined into tables and filters), `group_by`
+  summaries, a two-group comparison (`compare=`: side-by-side overlap maps, Fisher and
+  Mann-Whitney tests with FDR), left/right flip check from a side column, duplicate and
+  near-duplicate masks, cohort outliers, parallel workers (`n_jobs`), incremental re-runs,
+  anonymised output with a private key file, thumbnails, search and filter chips that
+  recompute the cohort bars, and `pdf="bundle"` (every subject's PDF, merged with bookmarks).
+- **Reproducibility** (`lqtpy.repro`): every report embeds a run record (versions, settings,
+  input SHA-256); `lqtpy rerun report.html` repeats the analysis, finding moved files by
+  checksum.
+- **Inputs**: MGZ, NRRD (built-in reader) and DICOM-SEG (`highdicom`); native-space masks
+  (`native=` for drawing checks, `transform=` to warp; `lqtpy warp`).
+- **Folder QC**: `lqtpy qc FOLDER` writes one page of every mask's flags; `--clean-to` writes
+  cleaned copies to a new folder, never overwriting.
+- **Command line**: plain, aligned output with colour only for the quality word; the report
+  path printed once, in the platform's form; `--quiet` prints only the path; `--atlas` no
+  longer offers `tissue`; new `warp`, `rerun`, `watch`, `serve`, `fetch`, `new-plugin`,
+  `config` and `cache` commands; `lqtpy.toml` settings file.
+- **Web front end** (`lqtpy serve`): an upload page on top of the core; uploads are
+  anonymised and deleted after the report is sent.
+- **Watch-folder mode** (`lqtpy watch`), **plugin starter template** (`lqtpy new-plugin`),
+  **optional cerebellar lobule atlas** (`lqtpy fetch suit`), **data dictionary**
+  (`data_dictionary.csv` next to every output), **documentation site and gallery**
+  (`tools/build_docs.py`), **visual regression tests** (`tools/visual_check.py`).
+- Template maps (distance maps, border zones, brain mask) are cached on disk once per
+  installation: a cold process makes a report in ~3.5 s instead of ~15 s.
+
+### Changed (check your code)
+- **Extras are off by default everywhere**: the CLI no longer runs `--extras all` unless asked
+  (it used to, while `analyze_single()` didn't).
+- `analyze_single`'s first argument is `lesion` (`lesion_path=` still works); arguments after
+  `out_dir` are keyword-only — positional use still works with a `DeprecationWarning`.
+- Result keys `glass_uri`/`slices_uri`/`overlap_uri`(+`_light`) and `flat_uris` are replaced
+  by `glass_svg`, `slices_svg`, `overlap_svgs` and `flat_svgs`.
+- The group overlap map (`lesion_overlap_map.nii.gz`) is on the FSL MNI152 1 mm grid.
+- The group CSV's `QC` column uses OK / Note / Check / Problem; a `GroupFlags` column is added.
+- Result dictionaries keep snake_case keys and tables keep CamelCase columns (documented, not
+  changed, so existing CSV readers keep working).
+
+## 0.5.0 roadmap phases
+
+
+### New in the roadmap phases
 - `lqtpy.prepare()` / `PreparedLesion`: load and binarize a lesion once, then reuse it across
   every API call. Resampling to each atlas grid is cached and cropped to the lesion, so it
   scales with lesion size, not grid size.
@@ -100,3 +170,5 @@ Implements Phases 0–7 of [docs/ROADMAP.md](docs/ROADMAP.md).
 | `atlas_overlap` (resampled atlas) | 120 ms | 26 ms |
 | five API calls on one lesion | 647 ms | 49 ms (prepared once) |
 | `analyze_single`, no plots | 367 ms (3 atlases) | 143 ms (5 atlases + QC + description) |
+| `analyze_single`, no plots, all 0.5.0 modules | | 390 ms (+ border zones, distances, cross-sections, mirror) |
+| `analyze_single` with the full HTML report | ~8 s (matplotlib/nilearn figures) | 0.8 s (numpy figures) |

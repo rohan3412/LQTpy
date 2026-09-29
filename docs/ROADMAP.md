@@ -4,7 +4,7 @@ Written 2026-09-25, after the full audit
 ([report](https://claude.ai/artifact/SZyQHJCh25GL2qsnt7oGPN)). Phases are ordered by
 dependency: each one builds on the one before it.
 
-## Status (2026-09-25)
+## Status (2026-09-29)
 
 | Phase | State |
 |---|---|
@@ -17,6 +17,8 @@ dependency: each one builds on the one before it.
 | 6. Shape extras | Done: synthetic bands plus a 898-lesion cohort reference (aggregates only) |
 | 7. Reports | Done: dashboard (dark/light) + clinical view, Export PDF, `to_pdf()` |
 | Tissue and location classes (added 2026-09-28) | Done: `lqtpy.tissue`, bundled `tissue` atlas; cortical / juxtacortical / periventricular / deep white matter / deep grey / infratentorial per part, tissue composition per lesion, in descriptions, results and reports |
+| Design and consistency review (2026-09-28) | Done: one vocabulary for volumes, quality, deep grey matter and territories; midline share; six tiles; figures without matplotlib (report < 1 s) |
+| Ideas inbox (2026-09-29) | Done: metadata, border zones, duplicates, outliers, parallel and incremental runs, anonymised output, group comparison, flip check, folder QC, web front end, report conveniences, reproducibility and rerun, config file, thumbnails, distances, cross-section load, data dictionary, SUIT atlas, mirror image, watch mode, MGZ/NRRD/DICOM-SEG, native space, plugin template, visual regression, accessibility, table-map linking, remembered sort, CLI polish, API tidy-up, gallery, docs site. See CHANGELOG.md |
 
 Real-data validation: 1,231 clinical masks, no failures. QC was tuned on them (new
 `edge_artifact` check); a visual review of flagged samples confirmed the sparse-slice and
@@ -229,9 +231,9 @@ Each atlas fills in schema v2 and is registered as a plugin (core or extra, deci
 - **Content:** description and QC flags go first, with real disconnection when an index
   exists. Group reports get lobe tables and **one report per subject**, linked from the
   group report.
-- **Design pass** across the whole project (reports, CLI output, docs): start by asking the
-  user about their preferences, then spend real effort on typography, colour, layout and
-  both themes.
+- **Design pass** across the whole project (reports, CLI output, docs): done. Reports
+  first (dark dashboard, light mode, clinical view); CLI output as plain aligned text with
+  colour only for quality words (chosen 2026-09-28); docs as a generated site and gallery.
 
 ---
 

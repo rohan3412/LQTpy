@@ -6,7 +6,7 @@ import os
 import numpy as np
 import nibabel as nib
 from ._resample import resample_to_img
-from .errors import GeometryError, InvalidLesionError
+from .errors import GeometryError, InvalidLesionError, LQTpyError
 
 
 def as_lesion_image(src) -> nib.Nifti1Image:
@@ -26,8 +26,11 @@ def as_lesion_image(src) -> nib.Nifti1Image:
     if isinstance(src, (str, os.PathLike)):
         path = os.fspath(src)
         try:
-            img = nib.load(path)
+            from .formats import load_image
+            img = load_image(path)
         except FileNotFoundError:
+            raise
+        except LQTpyError:
             raise
         except Exception as exc:
             raise InvalidLesionError(

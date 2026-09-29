@@ -3,11 +3,13 @@ one file.
 
 ``render_single`` (one lesion) and ``render_group`` (a cohort) turn an
 ``analyze_single``/``analyze_group`` result into a single HTML file with
-every image embedded. The file holds two views, switched from its toolbar:
+every figure embedded. The file holds two views, switched from its toolbar:
 
 - **Dashboard** -- dark by default (light on request), summary first: key
-  numbers, the written description, quality flags, figures, then where the
-  lesion is. Atlas tables and extras sit below, collapsed.
+  numbers, the written description (with a copy button and glossary
+  popovers), quality flags, figures and a scroll-through slice viewer, then
+  where the lesion is. Atlas tables, extras, downloads and the run record
+  sit below, collapsed.
 - **Clinical report** -- a paper-like document (serif text, numbered
   sections, figure captions). This is also what "Export PDF" prints, and
   what :func:`lqtpy.report.to_pdf` produces.
@@ -15,22 +17,29 @@ every image embedded. The file holds two views, switched from its toolbar:
 Colour is informative and used the same way everywhere:
 
 =================  ========================================================
-lesion orange      how much of a structure is damaged (bars, flat maps)
+lesion orange      how much of a structure is damaged (bars, maps)
 neutral ink        what share of the lesion lies somewhere
-blue / teal        left / right hemisphere
+blue / teal        left / right hemisphere (checked for colour-vision deficiency)
 violet             extras (anything not core)
-status colours     QC only, always with an icon and a word
+status colours     QC only, always with a word (OK / Note / Check / Problem)
 =================  ========================================================
 
-Every data value is escaped: region labels can come from host-registered
-atlases and are treated as untrusted.
+Tables sort by any column (remembered per table), and hovering a table row
+highlights the same region on the maps, and back. Every data value is
+escaped: region labels can come from host-registered atlases and are
+treated as untrusted.
 """
 from __future__ import annotations
 
+import base64
 import datetime
 import html
+import json
+import os
+import re
 
 from .. import _format as fmt
+from ._assets import CSS, GLOSSARY, JS
 from .style import DEFAULT_STYLE, ReportStyle
 
 __all__ = ["render_single", "render_group"]
@@ -49,7 +58,6 @@ def _records(x) -> "list[dict]":
 
 
 def _basename(path) -> str:
-    import os
     return os.path.basename(str(path).replace("\\", "/")) if path else ""
 
 
@@ -60,300 +68,20 @@ def _pct(v, digits=0) -> str:
     return f"{v:.{digits}f}%"
 
 
+def _json_script(id_, obj) -> str:
+    text = json.dumps(obj, default=str).replace("</", "<\\/")
+    return f'<script type="application/json" id="{_esc(id_)}">{text}</script>'
+
+
 # =========================================================================== #
-# Stylesheet and behaviour (plain strings: no f-string brace escaping)
+# Page
 # =========================================================================== #
-_CSS = r"""
-:root {
-  color-scheme: dark;
-  --bg:#0d1015; --panel:#151a21; --panel-2:#1b212a; --line:rgba(255,255,255,.08);
-  --line-2:rgba(255,255,255,.16); --ink:#e9edf2; --ink-2:#b3bcc8; --ink-3:#8a93a1;
-  --lesion:#f07a45; --lesion-track:rgba(240,122,69,.14); --comp:#8f9aab; --comp-track:rgba(255,255,255,.06);
-  --left:#3987e5; --right:#199e70; --mid:#6b7480;
-  --extra:#9085e9; --extra-soft:rgba(144,133,233,.10);
-  --ok:#35c04f; --warn:#fab219; --err:#e5534b; --info:#8a93a1;
-  --ok-bg:rgba(12,163,12,.14); --warn-bg:rgba(250,178,25,.13); --err-bg:rgba(208,59,59,.16); --info-bg:rgba(255,255,255,.05);
-  --focus:#7ab3ff; --shadow:0 1px 0 rgba(255,255,255,.03), 0 8px 24px rgba(0,0,0,.25);
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-  --serif:Charter,"Bitstream Charter","Sitka Text",Cambria,Georgia,serif;
-  --mono:ui-monospace,"SF Mono",Consolas,"Liberation Mono",monospace;
-}
-:root[data-theme="light"] {
-  color-scheme: light;
-  --bg:#f4f5f7; --panel:#ffffff; --panel-2:#f1f3f6; --line:#e3e6eb; --line-2:#cfd4dc;
-  --ink:#121820; --ink-2:#4a5361; --ink-3:#6c7584;
-  --lesion:#e0602a; --lesion-track:rgba(224,96,42,.12); --comp:#8a94a3; --comp-track:#edf0f3;
-  --left:#2a78d6; --right:#1a9e6f; --mid:#9aa3ae;
-  --extra:#4a3aa7; --extra-soft:rgba(74,58,167,.06);
-  --ok:#0b8a0b; --warn:#9a6700; --err:#c0342f; --info:#6c7584;
-  --ok-bg:#e8f5e8; --warn-bg:#fff4d6; --err-bg:#fde8e6; --info-bg:#f1f3f6;
-  --focus:#2a78d6; --shadow:0 1px 2px rgba(16,24,40,.05);
-}
-* { box-sizing:border-box; }
-html, body { margin:0; }
-body { background:var(--bg); color:var(--ink); font:14px/1.55 var(--sans); -webkit-font-smoothing:antialiased; }
-a { color:var(--focus); }
-:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:4px; }
-.num, td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
-.muted { color:var(--ink-3); }
-
-/* ---------- toolbar ---------- */
-.bar { position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
-  padding:10px 20px; background:color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
-.brand { font-weight:700; letter-spacing:.02em; }
-.brand small { font-weight:500; color:var(--ink-3); margin-left:8px; letter-spacing:0; }
-.spacer { flex:1; }
-.seg { display:inline-flex; border:1px solid var(--line-2); border-radius:8px; overflow:hidden; }
-.seg button, .btn { font:inherit; font-size:13px; color:var(--ink-2); background:transparent; border:0;
-  padding:6px 12px; cursor:pointer; }
-.seg button[aria-pressed="true"] { background:var(--panel-2); color:var(--ink); font-weight:600; }
-.btn { border:1px solid var(--line-2); border-radius:8px; }
-.btn:hover, .seg button:hover { color:var(--ink); }
-.btn.primary { background:var(--ink); color:var(--bg); border-color:var(--ink); font-weight:600; }
-html[data-view="clinical"] .theme-only { display:none; }
-
-/* ---------- views ---------- */
-.view { display:none; }
-html[data-view="dashboard"] .view-dash { display:block; }
-html[data-view="clinical"] .view-clin { display:block; }
-
-/* ---------- dashboard ---------- */
-.dash { max-width:1180px; margin:0 auto; padding:24px 20px 72px; display:grid; gap:16px; }
-.hero { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px 16px; }
-.hero h1 { margin:0; font-size:24px; letter-spacing:-.01em; text-wrap:balance; }
-.hero .meta { color:var(--ink-3); font-size:12.5px; }
-.back { font-size:13px; }
-.pill { display:inline-flex; align-items:center; gap:6px; padding:2px 10px; border-radius:999px;
-  font-size:12px; font-weight:600; border:1px solid var(--line-2); color:var(--ink-2); }
-.pill.extra { color:var(--extra); border-color:var(--extra); background:var(--extra-soft); }
-.kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(146px,1fr)); gap:12px; }
-.kpi { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
-.kpi .k { font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-3); }
-.kpi .v { font-size:22px; font-weight:650; margin-top:2px; line-height:1.2; }
-.kpi .v.text { font-size:17px; }
-.kpi .s { font-size:12.5px; color:var(--ink-2); margin-top:2px; }
-.card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px 20px;
-  box-shadow:var(--shadow); min-width:0; }
-.card > h2 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-3); font-weight:650; }
-.cols { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:16px; }
-.cols3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
-@media (max-width:900px){ .cols, .cols3 { grid-template-columns:1fr; } }
-.desc p { margin:0 0 10px; max-width:72ch; color:var(--ink-2); }
-.desc p strong { color:var(--ink); font-weight:650; }
-.desc .h { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-3); margin-bottom:1px; }
-.plate { background:#000; border-radius:10px; overflow:hidden; }
-.plate.light { background:#fff; border:1px solid var(--line); }
-.plate img { display:block; width:100%; height:auto; }
-figure { margin:0; }
-figcaption { font-size:12px; color:var(--ink-3); margin-top:6px; }
-.figs { display:grid; gap:12px; }
-
-/* bars */
-.rows { display:grid; gap:7px; }
-.row { display:grid; grid-template-columns:minmax(0,1fr) 72px 40px; gap:10px; align-items:center; font-size:13px; }
-.row .name { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.3; }
-.row .name small { color:var(--ink-3); margin-left:6px; }
-.track { height:8px; border-radius:4px; background:var(--comp-track); overflow:hidden; }
-.track i { display:block; height:100%; border-radius:4px; background:var(--comp); }
-.track.dmg { background:var(--lesion-track); }
-.track.dmg i { background:var(--lesion); }
-.chip { display:inline-block; font-size:11px; padding:0 7px; border-radius:999px; border:1px solid var(--line-2);
-  color:var(--ink-2); margin-left:6px; white-space:nowrap; vertical-align:1px; }
-.legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--ink-3); margin:2px 0 10px; }
-.legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
-.side { display:flex; height:10px; border-radius:5px; overflow:hidden; background:var(--comp-track); margin-top:8px; gap:2px; }
-.side span { display:block; height:100%; }
-.l { background:var(--left); } .r { background:var(--right); } .m { background:var(--mid); }
-
-/* quality */
-.flags { display:grid; gap:8px; }
-.flag { display:grid; grid-template-columns:22px 1fr; gap:10px; padding:10px 12px; border-radius:10px;
-  background:var(--info-bg); border:1px solid var(--line); }
-.flag .ic { width:22px; height:22px; border-radius:50%; display:grid; place-items:center; font-weight:800;
-  font-size:13px; color:#0d1015; background:var(--info); }
-.flag.warn { background:var(--warn-bg); } .flag.warn .ic { background:var(--warn); }
-.flag.error { background:var(--err-bg); } .flag.error .ic { background:var(--err); color:#fff; }
-.flag b { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
-.flag .sug { color:var(--ink-3); font-size:12.5px; }
-.status { display:inline-flex; align-items:center; gap:6px; font-weight:650; }
-.status .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); }
-.status.warn .dot { background:var(--warn); } .status.error .dot { background:var(--err); }
-
-/* details */
-.section-title { margin:10px 2px 0; font-size:13px; text-transform:uppercase; letter-spacing:.07em; color:var(--ink-3); font-weight:650; }
-details.card { padding:0; }
-details.card > summary { list-style:none; cursor:pointer; padding:14px 20px; display:flex; gap:10px; align-items:baseline; }
-details.card > summary::-webkit-details-marker { display:none; }
-details.card > summary::before { content:"\25B8"; color:var(--ink-3); transition:transform .15s; }
-details.card[open] > summary::before { transform:rotate(90deg); }
-details.card > summary .t { font-weight:650; }
-details.card > summary .s { color:var(--ink-3); font-size:12.5px; }
-details.card > .inner { padding:0 20px 18px; }
-table { border-collapse:collapse; width:100%; font-size:13px; }
-th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
-th { font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-3); font-weight:650; }
-td .track { width:120px; display:inline-block; vertical-align:middle; margin-left:8px; }
-.tablewrap { overflow-x:auto; }
-th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
-th.sortable:hover { color:var(--ink); }
-th.sortable::after { content:"\2195"; margin-left:4px; opacity:.35; font-size:10px; }
-th.sortable[aria-sort="ascending"]::after { content:"\25B2"; opacity:.9; }
-th.sortable[aria-sort="descending"]::after { content:"\25BC"; opacity:.9; }
-.tablewrap.scroll { max-height:min(60vh, 560px); overflow:auto; }
-.tablewrap.scroll thead th { position:sticky; top:0; background:var(--panel); z-index:1;
-  box-shadow:inset 0 -1px 0 var(--line); }
-.card .count { font-weight:500; color:var(--ink-3); text-transform:none; letter-spacing:0; margin-left:6px; }
-.theme-img.dark-img { display:block; } .theme-img.light-img { display:none; }
-:root[data-theme="light"] .theme-img.dark-img { display:none; }
-:root[data-theme="light"] .theme-img.light-img { display:block; }
-.flatmap img { width:100%; height:auto; border-radius:8px; }
-.note { font-size:12.5px; color:var(--ink-3); }
-.extras { border:1px solid var(--extra); background:linear-gradient(var(--extra-soft), var(--panel) 140px); }
-.extras > h2 { color:var(--extra); }
-.tier { font-size:10px; font-weight:800; letter-spacing:.06em; color:var(--extra); border:1px solid var(--extra);
-  border-radius:4px; padding:0 5px; margin-left:6px; vertical-align:2px; }
-.words { font-size:15px; color:var(--ink); margin:0 0 8px; }
-.mods { list-style:none; padding:0; margin:0; display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:4px 18px; font-size:13px; }
-.mods li { display:flex; gap:8px; }
-.st { font-size:10.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; min-width:84px; }
-.st.ran { color:var(--ok); } .st.skipped, .st.unavailable { color:var(--ink-3); } .st.failed { color:var(--err); }
-.qc-badge { font-size:11px; font-weight:700; border-radius:999px; padding:1px 8px; white-space:nowrap; }
-.qc-badge.ok { background:var(--ok-bg); color:var(--ok); }
-.qc-badge.warn { background:var(--warn-bg); color:var(--warn); }
-.qc-badge.error { background:var(--err-bg); color:var(--err); }
-.mini { display:flex; height:6px; width:70px; border-radius:3px; overflow:hidden; background:var(--comp-track); gap:1px; }
-.mini span { height:100%; }
-
-/* ---------- clinical report ---------- */
-html[data-view="clinical"] body { background:#e9ebee; }
-.doc { background:#fff; color:#15181d; max-width:210mm; margin:24px auto 64px; padding:18mm 18mm 16mm;
-  box-shadow:0 1px 3px rgba(0,0,0,.12), 0 12px 32px rgba(0,0,0,.10); font:10.5pt/1.5 var(--serif); }
-.doc h1 { font:700 17pt/1.2 var(--sans); margin:0 0 2mm; letter-spacing:-.01em; }
-.doc .sub { font:9pt/1.4 var(--sans); color:#5b6370; margin-bottom:6mm; }
-.doc h2 { font:700 11pt/1.3 var(--sans); margin:7mm 0 2.5mm; padding-bottom:1.5mm; border-bottom:1.5px solid #15181d;
-  break-after:avoid; }
-.doc h2 .no { color:#8a8f98; margin-right:2mm; font-weight:600; }
-.doc p { margin:0 0 2.5mm; }
-.doc strong { font-weight:700; }
-.doc table { font:9pt/1.4 var(--sans); break-inside:auto; }
-.doc th, .doc td { border-bottom:1px solid #d9dde2; padding:1.4mm 2mm; color:#15181d; }
-.doc th { color:#5b6370; font-size:8pt; }
-.doc .meta td:first-child { color:#5b6370; width:34%; }
-.doc .flagline { font:9.5pt/1.45 var(--sans); margin:0 0 1.8mm; padding-left:5mm; position:relative; }
-.doc .flagline::before { content:"\25B2"; position:absolute; left:0; top:0; font-size:8pt; color:#9a6700; }
-.doc .flagline.error::before { color:#c0342f; }
-.doc .ok { font:9.5pt var(--sans); color:#0b6b0b; }
-.doc figure { break-inside:avoid; margin:3mm 0 4mm; }
-.doc img { display:block; max-width:100%; height:auto; }
-.doc .plate { max-width:150mm; background:#fff; border:1px solid #d9dde2; }
-.doc figure .plate { border-radius:2mm; }
-.doc figcaption { font:8.5pt/1.4 var(--sans); color:#5b6370; }
-.doc .extra-tag { font:700 7.5pt var(--sans); letter-spacing:.06em; color:#4a3aa7; border:1px solid #4a3aa7;
-  border-radius:1mm; padding:0 1.2mm; margin-left:2mm; vertical-align:1pt; }
-.doc .fine { font:8pt/1.45 var(--sans); color:#5b6370; }
-.doc .two { display:grid; grid-template-columns:1fr 1fr; gap:5mm; }
-
-/* ---------- print: always the clinical document, on white ---------- */
-@page { size:A4; margin:12mm; }
-@media print {
-  :root { color-scheme:light; }
-  body, html[data-view="clinical"] body { background:#fff !important; }
-  .bar, .view-dash { display:none !important; }
-  .view-clin { display:block !important; }
-  .doc { box-shadow:none; margin:0; padding:0; max-width:none; }
-  th.sortable::after { content:none !important; }
-  a { color:inherit; text-decoration:none; }
-}
-@media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
-"""
-
-_JS = r"""
-(function () {
-  var root = document.documentElement;
-  function get(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
-  function put(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
-  function setView(v) {
-    root.setAttribute("data-view", v); put("lqtpy.view", v);
-    document.querySelectorAll("[data-set-view]").forEach(function (b) {
-      b.setAttribute("aria-pressed", String(b.getAttribute("data-set-view") === v));
-    });
-  }
-  function setTheme(t) {
-    root.setAttribute("data-theme", t); put("lqtpy.theme", t);
-    var b = document.getElementById("theme-btn");
-    if (b) { b.textContent = t === "dark" ? "Light mode" : "Dark mode"; }
-  }
-  // Images are embedded once; the clinical view borrows them by id.
-  document.querySelectorAll("img[data-src-from]").forEach(function (img) {
-    var src = document.getElementById(img.getAttribute("data-src-from"));
-    if (src) { img.src = src.src; }
-  });
-  // A link can pick the view/theme: report.html#clinical, #dashboard, #light, #dark.
-  var h = (location.hash || "").toLowerCase();
-  setTheme(/light/.test(h) ? "light" : /dark/.test(h) ? "dark" : get("lqtpy.theme", "dark"));
-  setView(/clinical/.test(h) ? "clinical" : /dashboard/.test(h) ? "dashboard"
-          : get("lqtpy.view", "dashboard"));
-  document.querySelectorAll("[data-set-view]").forEach(function (b) {
-    b.addEventListener("click", function () { setView(b.getAttribute("data-set-view")); });
-  });
-  var tb = document.getElementById("theme-btn");
-  if (tb) tb.addEventListener("click", function () {
-    setTheme(root.getAttribute("data-theme") === "dark" ? "light" : "dark");
-  });
-  // Sortable tables: click a header to sort by that column; click again to
-  // reverse. Cells may carry data-sort to sort by something other than
-  // their text. Numbers ("7.2", "45%", "1,234", "<1%") sort numerically.
-  function key(td) {
-    if (!td) return "";
-    var v = td.hasAttribute("data-sort") ? td.getAttribute("data-sort") : td.textContent.trim();
-    var m = v.replace(/,/g, "").match(/^[<>~]?\s*(-?\d+(\.\d+)?)/);
-    return m ? parseFloat(m[1]) : v.toLowerCase();
-  }
-  document.querySelectorAll("table").forEach(function (table) {
-    var head = table.tHead, body = table.tBodies[0];
-    if (!head || !body || body.rows.length < 2) return;
-    var ths = head.rows[0].cells;
-    Array.prototype.forEach.call(ths, function (th, col) {
-      th.classList.add("sortable");
-      th.setAttribute("tabindex", "0");
-      th.setAttribute("title", "Sort by this column");
-      function sort() {
-        var cur = th.getAttribute("aria-sort");
-        var rows = Array.prototype.slice.call(body.rows);
-        var numeric = rows.every(function (r) {
-          var k = key(r.cells[col]); return typeof k === "number" || k === "" || k === "\u2014";
-        });
-        var dir = cur ? (cur === "ascending" ? "descending" : "ascending")
-                      : (numeric ? "descending" : "ascending");
-        rows.sort(function (a, b) {
-          var x = key(a.cells[col]), y = key(b.cells[col]);
-          var xn = typeof x === "number", yn = typeof y === "number";
-          var c = xn && yn ? x - y : xn ? -1 : yn ? 1 : String(x).localeCompare(String(y));
-          if (xn !== yn) return c;  // blanks last in both directions
-          return dir === "ascending" ? c : -c;
-        });
-        rows.forEach(function (r) { body.appendChild(r); });
-        Array.prototype.forEach.call(ths, function (o) { o.removeAttribute("aria-sort"); });
-        th.setAttribute("aria-sort", dir);
-      }
-      th.addEventListener("click", sort);
-      th.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sort(); }
-      });
-    });
-  });
-  var pb = document.getElementById("pdf-btn");
-  if (pb) pb.addEventListener("click", function () { window.print(); });
-})();
-"""
-
-
-def _page(title: str, dash: str, clin: str, *, subtitle: str = "") -> str:
+def _page(title: str, dash: str, clin: str, *, subtitle: str = "", tail: str = "") -> str:
     return (
         '<!doctype html><html lang="en" data-theme="dark" data-view="dashboard"><head>'
         '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"<title>{_esc(title)}</title><style>{_CSS}</style></head><body>"
+        f'<meta name="generator" content="lqtpy"><title>{_esc(title)}</title><style>{CSS}</style></head><body>'
+        '<a class="skip" href="#main">Skip to the report</a>'
         '<div class="bar" role="toolbar" aria-label="Report view">'
         f'<span class="brand">LQTpy<small>{_esc(subtitle)}</small></span><span class="spacer"></span>'
         '<span class="seg" role="group" aria-label="View">'
@@ -364,9 +92,9 @@ def _page(title: str, dash: str, clin: str, *, subtitle: str = "") -> str:
         '<button type="button" class="btn primary" id="pdf-btn" title="Opens the print dialog; '
         'choose Save as PDF. Prints the clinical report.">Export PDF</button>'
         "</div>"
-        f'<main class="view view-dash">{dash}</main>'
-        f'<main class="view view-clin">{clin}</main>'
-        f"<script>{_JS}</script></body></html>"
+        f'<main id="main" class="view view-dash" aria-label="Dashboard">{dash}</main>'
+        f'<main class="view view-clin" aria-label="Clinical report">{clin}</main>'
+        f"{tail}<script>{JS}</script></body></html>"
     )
 
 
@@ -375,6 +103,8 @@ def _page(title: str, dash: str, clin: str, *, subtitle: str = "") -> str:
 # =========================================================================== #
 _KIND = {"single": "Single lesion", "group": "Group", "group-member": "Single lesion (from a group)"}
 _SHORT = {"aal": "AAL", "schaefer": "Schaefer", "dk": "DKT", "jhu": "JHU", "arterial": "Arterial"}
+_TERR_LEGEND = ("ACA, MCA, PCA: anterior, middle and posterior cerebral artery; VB: vertebrobasilar; "
+                "L/R: left/right. Territories from Liu et al. 2023.")
 
 
 def _bar(value, cls="", max_value=100.0) -> str:
@@ -382,17 +112,43 @@ def _bar(value, cls="", max_value=100.0) -> str:
     return f'<span class="track {cls}" aria-hidden="true"><i style="width:{w:.1f}%"></i></span>'
 
 
-def _row(name, value, cls, extra="", max_value=100.0, digits=0, title=None, key=None) -> str:
-    k = f' data-key="{_esc(key)}"' if key else ""
-    return (f'<div class="row"{k}><span class="name" title="{_esc(title or name)}">{_esc(name)}{extra}</span>'
+def _row(name, value, cls, extra="", max_value=100.0, digits=0, title=None, hl=None) -> str:
+    h = f' data-hl="{_esc(hl)}"' if hl else ""
+    return (f'<div class="row"{h}><span class="name" title="{_esc(title or name)}">{_esc(name)}{extra}</span>'
             f'{_bar(value, cls, max_value)}<span class="num">{_pct(value, digits)}</span></div>')
 
 
-def _emph(text: str) -> str:
+_GL_RE = None
+
+
+def _gloss(markup: str) -> str:
+    """Wrap the first occurrence of each glossary term (outside tags) in a
+    focusable popover."""
+    global _GL_RE
+    if _GL_RE is None:
+        terms = sorted(GLOSSARY, key=len, reverse=True)
+        _GL_RE = re.compile(r"(?<![\w-])(" + "|".join(re.escape(t) for t in terms) + r")(?![\w-])",
+                            re.IGNORECASE)
+    seen = set()
+
+    def sub(m):
+        word = m.group(1)
+        k = next(t for t in GLOSSARY if t.lower() == word.lower())
+        if k in seen:
+            return word
+        seen.add(k)
+        return f'<span class="gl" tabindex="0" data-def="{_esc(GLOSSARY[k])}">{word}</span>'
+
+    parts = re.split(r"(<[^>]+>)", markup)
+    return "".join(p if p.startswith("<") else _GL_RE.sub(sub, p) for p in parts)
+
+
+def _emph(text: str, gloss: bool = False) -> str:
     """Escape, turning **...** spans (key findings) into <strong>."""
     parts = str(text).split("**")
-    return "".join(_esc(p) if i % 2 == 0 else f"<strong>{_esc(p)}</strong>"
-                   for i, p in enumerate(parts))
+    out = "".join(_esc(p) if i % 2 == 0 else f"<strong>{_esc(p)}</strong>"
+                  for i, p in enumerate(parts))
+    return _gloss(out) if gloss else out
 
 
 def _desc_sections(res) -> "list[tuple[str, str]]":
@@ -411,10 +167,9 @@ def _flags_html(flags) -> str:
     out = []
     for f in items:
         icon = {"error": "×", "warn": "!", "info": "i"}[f["severity"]]
-        word = fmt.quality_label(f["severity"])
         sug = f'<div class="sug">{_esc(f["suggestion"])}</div>' if f.get("suggestion") else ""
         out.append(f'<div class="flag {f["severity"]}"><span class="ic" aria-hidden="true">{icon}</span>'
-                   f'<div><b>{word}</b>{_esc(f["message"])}{sug}</div></div>')
+                   f'<div><b>{fmt.quality_label(f["severity"])}</b>{_esc(f["message"])}{sug}</div></div>')
     return f'<div class="flags">{"".join(out)}</div>'
 
 
@@ -434,56 +189,104 @@ def _scope_pill(manifest) -> str:
     return '<span class="pill">Core only</span>'
 
 
-def _about(manifest, extra_rows="") -> str:
+def _run_block(run: "dict | None", report_name: str) -> str:
+    """The reproducibility record: versions, settings, input checksums and
+    the command that repeats the analysis."""
+    if not run:
+        return ""
+    env = run.get("environment", {})
+    sets = run.get("settings", {})
+    kv = "".join(f"<dt>{_esc(k)}</dt><dd>{_esc(v)}</dd>" for k, v in env.items())
+    sv = "".join(f"<dt>{_esc(k)}</dt><dd>{_esc(v)}</dd>" for k, v in sets.items()
+                 if v not in (None, "", False) or k in ("tracts", "qc", "describe"))
+    inputs = run.get("inputs", [])
+    shown = inputs[:12]
+    ins = "".join(f"<tr><td>{_esc(i.get('name'))}</td><td class='mono'>{_esc((i.get('sha256') or '')[:16])}…</td>"
+                  f"<td>{_esc(_basename(i.get('path')) or '—')}</td></tr>" for i in shown)
+    more = (f'<p class="note">{len(inputs) - len(shown)} more inputs in the run record.</p>'
+            if len(inputs) > 12 else "")
+    cmd = f"lqtpy rerun {report_name}"
+    return (f'<h3 class="section-title">Reproduce this report</h3>'
+            f'<div class="cmd"><code id="rerun-cmd">{_esc(cmd)}</code>'
+            '<button type="button" class="btn small" data-copy="rerun-cmd">Copy</button></div>'
+            '<p class="note">Runs the same analysis with the same settings. Inputs are found by their '
+            'recorded path, or by checksum with <code>--search FOLDER</code>; a changed file is refused.</p>'
+            f'<dl class="kv">{kv}{sv}</dl>'
+            '<div class="tablewrap"><table data-table="run-inputs"><thead><tr><th>Input</th>'
+            f'<th>SHA-256</th><th>File</th></tr></thead><tbody>{ins}</tbody></table></div>{more}')
+
+
+def _about(manifest, run=None, report_name="report.html", extra_rows="") -> str:
     s = manifest.get("settings", {})
     sets = [f"lqtpy {_esc(manifest.get('lqtpy_version', ''))}",
             f"threshold &gt; {_esc(s.get('threshold', 0.5))}"]
     if s.get("profile"):
         sets.append(f"description profile: {_esc(s['profile'])}")
-    return (f'<details class="card"><summary><span class="t">About this report</span>'
+    return (f'<details class="card" id="about"><summary><span class="t">About this report</span>'
             f'<span class="s">{" · ".join(sets)}</span></summary><div class="inner">'
             f"{_modules(manifest)}{extra_rows}"
             '<p class="note">Physical measures use the image affine. Region overlap resamples the '
             'mask onto each atlas grid (nearest neighbour). Functional area labels describe '
-            'location, not symptoms. Not for clinical decision-making on its own.</p>'
-            "</div></details>")
+            'location, not symptoms. Border zones and distances are template-based and '
+            'approximate. Not for clinical decision-making on its own.</p>'
+            f"{_run_block(run, report_name)}</div></details>")
 
 
-def _img(uri, alt, id_=None) -> str:
-    if not uri:
-        return ""
-    idattr = f' id="{_esc(id_)}"' if id_ else ""
-    return f'<img{idattr} src="{uri}" alt="{_esc(alt)}" loading="lazy">'
+def _downloads(downloads: "dict | None") -> "tuple[str, str]":
+    """(card html, hidden data scripts) for the report's own tables."""
+    if not downloads:
+        return "", ""
+    btns, data = [], []
+    for i, (fname, path) in enumerate(sorted(downloads.items())):
+        try:
+            if os.path.getsize(path) > 5_000_000:
+                continue
+            with open(path, "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode("ascii")
+        except OSError:
+            continue
+        btns.append(f'<button type="button" class="btn small" data-dl="dl{i}" '
+                    f'data-name="{_esc(fname)}">{_esc(fname)}</button>')
+        data.append(f'<script type="text/plain" id="dl{i}">{b64}</script>')
+    if not btns:
+        return "", ""
+    card = ('<details class="card"><summary><span class="t">Download tables</span>'
+            f'<span class="s">{len(btns)} files, stored inside this report</span></summary>'
+            '<div class="inner"><p class="note">These are the CSV files written next to the report; '
+            'the report alone is enough to share them. <code>data_dictionary.csv</code> explains every '
+            f'column and unit.</p><div class="dl">{"".join(btns)}</div></div></details>')
+    return card, "".join(data)
 
 
-def _plates(dark, light, alt, id_) -> str:
-    """A brain figure in both themes: the dark plate for the dark dashboard,
-    the white one for light mode. The white one carries ``id_`` so the
-    clinical view (and the PDF) borrow it; without it, the dark one does."""
-    if not light:
-        return f'<div class="plate">{_img(dark, alt, id_)}</div>'
-    if not dark:
-        return f'<div class="plate light">{_img(light, alt, id_)}</div>'
-    return (f'<div class="theme-img dark-img"><div class="plate">{_img(dark, alt)}</div></div>'
-            f'<div class="theme-img light-img"><div class="plate light">{_img(light, alt, id_)}'
-            '</div></div>')
+def _plate(svg, id_) -> str:
+    return f'<div class="plate" id="{_esc(id_)}">{svg}</div>' if svg else ""
 
 
-def _borrow(id_, alt) -> str:
-    return f'<img data-src-from="{_esc(id_)}" alt="{_esc(alt)}">'
-
-
-def _flatmaps(a, id_prefix) -> str:
+def _flatmaps(a) -> str:
     out = []
-    for i, (cap, uris) in enumerate(a.get("flat_uris") or []):
-        if isinstance(uris, str):
-            uris = {"light": uris, "dark": uris}
-        light = _img(uris.get("light"), cap, f"{id_prefix}-flat{i}")
-        dark = _img(uris.get("dark"), cap)
-        out.append(f'<figure class="flatmap"><div class="theme-img dark-img">{dark}</div>'
-                   f'<div class="theme-img light-img">{light}</div>'
-                   f"<figcaption>{_esc(cap)}</figcaption></figure>")
+    for cap, svg in a.get("flat_svgs") or []:
+        out.append(f'<figure class="flatmap">{svg}<figcaption>{_esc(cap)} · hover a region, '
+                   'or a table row, to find it</figcaption></figure>')
     return "".join(out)
+
+
+def _viewer(res) -> "tuple[str, str]":
+    """(card html, scripts) for the brainsprite slice viewer."""
+    v = res.get("viewer")
+    if not v:
+        return "", ""
+    from ..figures import brainsprite_js
+    js = brainsprite_js()
+    if not js:
+        return "", ""
+    card = ('<details class="card"><summary><span class="t">Slice viewer</span>'
+            '<span class="s">scroll through the brain: click a view to move the cursor (2 mm grid)'
+            '</span></summary><div class="inner"><div class="viewer" id="viewer">'
+            '<canvas id="viewer-canvas" aria-label="Interactive slice viewer"></canvas>'
+            f'<img id="viewer-bg" src="{v["bg"]}" alt=""><img id="viewer-ov" src="{v["overlay"]}" alt="">'
+            '</div><p class="note">Lesion in orange on a tissue template. Uses brainsprite (MIT).</p>'
+            '</div></details>')
+    return card, _json_script("viewer-params", v["params"]) + f"<script>{js}</script>"
 
 
 # =========================================================================== #
@@ -538,8 +341,6 @@ _LOC_SHORT = {"periventricular": "periventricular", "juxtacortical": "juxtacorti
 
 
 def _tissue_kpi(t: dict, n_parts: int) -> "tuple[str, str]":
-    """('cortico-subcortical', '53% cortex · 35% WM') or, for many parts,
-    ('4 periventricular', 'of 7 · 2 deep WM · 1 infratentorial')."""
     comp = t.get("composition") or {}
     counts = {k: v for k, v in (t.get("counts") or {}).items() if v}
     if n_parts > 3 and counts:
@@ -559,23 +360,24 @@ def _tissue_text(t: dict) -> str:
 
 def _damaged(facts, limit=8) -> "list[dict]":
     rows = []
+    atlas = facts.get("atlas", "dk")
     for h in facts.get("hemispheres", []):
         side = h["hemisphere"] if h["hemisphere"] in ("left", "right") else ""
         for lb in h["lobes"]:
             for r in lb["regions"]:
                 rows.append({"name": f"{side} {r['name']}".strip(), "dmg": r["pct_damaged"],
-                             "share": r["pct_of_lesion"], "function": r.get("function")})
+                             "share": r["pct_of_lesion"], "function": r.get("function"),
+                             "hl": f"{atlas}|{r['region']}" if r.get("region") else None})
         for w in h.get("wm", []):
             rows.append({"name": f"{side} {w['name']}".strip(), "dmg": w["pct_damaged"],
-                         "share": w["pct_of_lesion"], "function": None, "wm": True})
+                         "share": w["pct_of_lesion"], "function": None, "wm": True, "hl": None})
     rows = [r for r in rows if r["share"] >= 0.5 or r["dmg"] >= 5]
     return sorted(rows, key=lambda r: -r["dmg"])[:limit]
 
 
 def _territories(facts, short: bool = True) -> "list[tuple[str, float, bool]]":
     """Territory parts, short form ('L MCA · frontal part', 'L lat.
-    lenticulostriate', 'bilateral VB · basilar artery'). ``short=False``
-    keeps the atlas's part names after the short territory."""
+    lenticulostriate', 'bilateral VB · basilar artery')."""
     rows = []
     for t in facts.get("territories", []):
         s1 = fmt.side_short(t["hemisphere"])
@@ -594,42 +396,43 @@ def _territories(facts, short: bool = True) -> "list[tuple[str, float, bool]]":
     return sorted([r for r in rows if r[1] >= 1], key=lambda r: -r[1])[:8]
 
 
-_TERR_LEGEND = ("ACA, MCA, PCA: anterior, middle and posterior cerebral artery; VB: vertebrobasilar; "
-                "L/R: left/right. Territories from Liu et al. 2023.")
-
-
-def _atlas_details(a, prefix) -> str:
+def _atlas_details(a) -> str:
     recs = _records(a["df"])
     cov = a.get("coverage") or {}
+    key = a["key"]
     head_s = (f"{len(recs)} regions involved · {cov.get('PercentLabelled', 0):.0f}% of the lesion "
-              f"is in {_SHORT.get(a['key'], a['key'])} regions") if cov else f"{len(recs)} regions"
+              f"is in {_SHORT.get(key, key)} regions") if cov else f"{len(recs)} regions"
     tier = '<span class="tier">EXTRA</span>' if a.get("tier") == "extra" else ""
     rows = "".join(
-        f'<tr><td>{_esc(r["RegionName"])}</td><td class="n">{r["PercentDamage"]:.1f}%'
-        f'{_bar(r["PercentDamage"], "dmg")}</td><td class="n">{r["PercentOfLesion"]:.1f}%'
-        f'{_bar(r["PercentOfLesion"])}</td><td class="n">{r["LesionVoxels"]:,}</td></tr>'
+        f'<tr data-hl="{_esc(key)}|{_esc(r["RegionName"])}" tabindex="0"><td>{_esc(r["RegionName"])}</td>'
+        f'<td class="n">{r["PercentDamage"]:.1f}%{_bar(r["PercentDamage"], "dmg")}</td>'
+        f'<td class="n">{r["PercentOfLesion"]:.1f}%{_bar(r["PercentOfLesion"])}</td>'
+        f'<td class="n">{r["LesionVoxels"]:,}</td></tr>'
         for r in recs[:40])
     more = (f'<p class="note">Showing 40 of {len(recs)} regions; every region is in the CSV.</p>'
             if len(recs) > 40 else "")
     rollups = ""
-    for key, label in (("lobe_df", "Lobe"), ("network_df", "Network")):
-        rr = _records(a.get(key))
+    for k, label in (("lobe_df", "Lobe"), ("network_df", "Network")):
+        rr = _records(a.get(k))
         if rr:
-            col = "Lobe" if key == "lobe_df" else "Network"
-            name = {"schaefer": "Yeo-7 network", "arterial": "Territory"}.get(a["key"], label)
-            rollups += (f'<h3 class="section-title">{_esc(name)}</h3><div class="tablewrap"><table>'
-                        f'<thead><tr><th>{_esc(name)}</th><th class="n">% damaged</th>'
-                        f'<th class="n">% of lesion</th></tr></thead><tbody>' + "".join(
-                            f'<tr><td>{_esc(r[col])}</td><td class="n">{r["PercentDamage"]:.1f}%'
-                            f'{_bar(r["PercentDamage"], "dmg")}</td><td class="n">{r["PercentOfLesion"]:.1f}%'
-                            f'{_bar(r["PercentOfLesion"])}</td></tr>' for r in rr) + "</tbody></table></div>")
+            col = "Lobe" if k == "lobe_df" else "Network"
+            name = {"schaefer": "Yeo-7 network", "arterial": "Territory"}.get(key, label)
+            body = "".join(
+                f'<tr><td>{_esc(fmt.lobe_word(r[col], short=True, capital=True) if col == "Lobe" else r[col])}</td>'
+                f'<td class="n">{r["PercentDamage"]:.1f}%{_bar(r["PercentDamage"], "dmg")}</td>'
+                f'<td class="n">{r["PercentOfLesion"]:.1f}%{_bar(r["PercentOfLesion"])}</td></tr>'
+                for r in rr)
+            rollups += (f'<h3 class="section-title">{_esc(name)}</h3><div class="tablewrap">'
+                        f'<table data-table="{_esc(k)}-{_esc(key)}"><thead><tr><th>{_esc(name)}</th>'
+                        '<th class="n">% damaged</th><th class="n">% of lesion</th></tr></thead>'
+                        f'<tbody>{body}</tbody></table></div>')
     table = ("" if not recs else
-             '<div class="tablewrap"><table><thead><tr><th>Region</th><th class="n">% of region damaged</th>'
-             f'<th class="n">% of lesion</th><th class="n">Voxels</th></tr></thead><tbody>{rows}'
-             f"</tbody></table></div>{more}")
+             f'<div class="tablewrap"><table data-table="regions-{_esc(key)}"><thead><tr><th>Region</th>'
+             '<th class="n">% of region damaged</th><th class="n">% of lesion</th><th class="n">Voxels</th>'
+             f'</tr></thead><tbody>{rows}</tbody></table></div>{more}')
     return (f'<details class="card"><summary><span class="t">{_esc(a["name"])}{tier}</span>'
             f'<span class="s">{_esc(head_s)}</span></summary><div class="inner">'
-            f'{_flatmaps(a, prefix)}{rollups}{table}</div></details>')
+            f'{_flatmaps(a)}{rollups}{table}</div></details>')
 
 
 def _extras_card(res, manifest) -> str:
@@ -655,14 +458,82 @@ def _extras_card(res, manifest) -> str:
                       f'{" — " + _esc(m["reason"]) if m.get("reason") else ""}</p>'
                       for m in extra_mods if m["status"] not in ("ran",)
                       and not (m["status"] == "skipped" and not measures))
-    return f'<section class="card extras"><h2>Extras</h2>{body}{missing}</section>'
+    return f'<section class="card extras" aria-label="Extras"><h2>Extras</h2>{body}{missing}</section>'
+
+
+def _nearby_card(res) -> str:
+    rows = [r for r in res.get("key_structures") or [] if r["DistanceMM"] <= 20][:8]
+    if not rows:
+        return ""
+    items = []
+    for r in rows:
+        d = "reaches it" if r["Reaches"] else f'{r["DistanceMM"]:.0f} mm'
+        items.append(f'<div><span>{_esc(r["Structure"])}</span><span class="num">{d}</span></div>')
+    return ('<section class="card" aria-label="Nearby structures"><h2>Nearby structures</h2>'
+            '<div class="legend"><span>shortest distance from the lesion (template-based)</span></div>'
+            f'<div class="dist">{"".join(items)}</div></section>')
+
+
+def _mirror_card(res) -> str:
+    h = res.get("homologue") or {}
+    regs = h.get("regions") or []
+    if not regs:
+        return ""
+    rows = "".join(f'<tr><td>{_esc(r["name"])}</td><td class="n">{r["pct_of_mirror"]:.0f}%</td></tr>'
+                   for r in regs)
+    return ('<details class="card"><summary><span class="t">Mirror image (homologous region)</span>'
+            f'<span class="s">the same place in the {_esc(h.get("side", "other"))} hemisphere · '
+            f'{h.get("self_overlap_pct", 0):.0f}% of the lesion overlaps its own mirror</span></summary>'
+            '<div class="inner"><p class="note">The lesion flipped across the midline. The homologous '
+            'region is used as an intact control region (perfusion, thickness, connectivity), and in '
+            'recovery research, where the undamaged homologue of a damaged area can take over part of '
+            'its work (for example the right-hemisphere homologue of Broca\'s area in aphasia).</p>'
+            '<div class="tablewrap"><table data-table="mirror"><thead><tr><th>Region under the mirror image</th>'
+            f'<th class="n">% of the mirror image</th></tr></thead><tbody>{rows}</tbody></table></div>'
+            '</div></details>')
+
+
+def _tracts_details(res) -> str:
+    tr = res.get("tracts")
+    if not tr:
+        return ""
+    trs = _records(tr["df"])
+    cross = {r["Tract"]: r for r in res.get("cross_section") or []}
+
+    def c(t, k):
+        return cross.get(t, {}).get(k, 0)
+
+    order = sorted(trs, key=lambda r: -c(r["Tract"], "MaxCrossSectionLoad"))[:25]
+    rows = "".join(
+        f'<tr><td>{_esc(r["Tract"])}</td><td class="n">{r["PercentOverlap"]:.1f}%'
+        f'{_bar(r["PercentOverlap"], "dmg")}</td>'
+        f'<td class="n">{c(r["Tract"], "MaxCrossSectionLoad"):.0f}%'
+        f'{_bar(c(r["Tract"], "MaxCrossSectionLoad"), "dmg")}</td>'
+        f'<td class="n">{c(r["Tract"], "BottleneckLoad"):.0f}%</td>'
+        f'<td class="n">{r["PercentOfLesion"]:.1f}%</td></tr>' for r in order)
+    return ('<details class="card"><summary><span class="t">White-matter tracts</span>'
+            f'<span class="s">{len(trs)} tracts touched · voxel overlap and cross-section load, '
+            'not streamline disconnection</span></summary><div class="inner"><p class="note">'
+            '<b>% of tract voxels</b>: a coarse proxy. <b>Max cross-section</b>: the largest share of '
+            'any 1 mm cross-section of the tract the lesion covers, a better guide to how much of the '
+            'tract is cut. <b>Narrowest</b>: the share of its narrowest cross-section.</p>'
+            '<div class="tablewrap"><table data-table="tracts"><thead><tr><th>Tract</th>'
+            '<th class="n">% of tract voxels</th><th class="n">Max cross-section</th>'
+            f'<th class="n">Narrowest</th><th class="n">% of lesion</th></tr></thead><tbody>{rows}'
+            '</tbody></table></div></div></details>')
 
 
 def render_single(res: dict, style: "ReportStyle | None" = None, *,
-                  back_link: "str | None" = None) -> str:
-    """The single-lesion report (dashboard + clinical views in one file)."""
+                  back_link: "str | None" = None, run: "dict | None" = None,
+                  downloads: "dict | None" = None) -> str:
+    """The single-lesion report (dashboard + clinical views in one file).
+
+    ``run`` is the run record to embed (default: ``res["manifest"]["run"]``);
+    ``downloads`` maps file names to paths of tables to embed for download.
+    """
     style = style or DEFAULT_STYLE
     manifest = res.get("manifest") or {}
+    run = run or manifest.get("run")
     m = res["morphometry"]
     facts = (res.get("description") or {}).get("facts") or {}
     flags = res.get("qc") or []
@@ -674,6 +545,7 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
     main = _main_structure(facts)
     terrs = facts.get("territories") or []
     parts = facts.get("n_clusters", m["n_components"])
+    bz = res.get("border_zones") or facts.get("border_zones") or {}
 
     # ---------------- dashboard ----------------
     back = f'<a class="back" href="{_esc(back_link)}">← Group report</a>' if back_link else ""
@@ -689,42 +561,59 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
     n_flags = f"{n_warn} flag" + ("s" if n_warn != 1 else "")
     qc_sub = "mask quality checks" if worst == "ok" else f"{n_flags} · mask quality"
     t0 = terrs[0] if terrs else None
+    terr_sub = (f'{t0["pct_of_lesion"]:.0f}% of the lesion' if t0 else "no territory data") + (
+        " · border zone" if bz.get("fits") else "")
     kpis = [
         ("Size", fmt.volume(m["volume_mm3"]),
          (f"{parts} separate parts" if parts != 1 else "one connected lesion")
          + f' · {m["n_voxels"]:,} voxels'),
         ("Side", f'{m["pct_left"]:.0f}% L · {m["pct_right"]:.0f}% R'
          + (f' · {m["pct_midline"]:.0f}% mid' if m.get("pct_midline", 0) >= 1 else ""), side),
-        ("Main territory", fmt.territory_short(t0["hemisphere"], t0["territory"]) if t0 else "—",
-         f'{t0["pct_of_lesion"]:.0f}% of the lesion' if t0 else "no territory data"),
+        ("Main territory", fmt.territory_short(t0["hemisphere"], t0["territory"]) if t0 else "—", terr_sub),
         ("Main location", main[0] if main else "—", f"{main[1]:.0f}% of the lesion" if main else ""),
         ("Tissue", *_tissue_kpi(res.get("tissue") or {}, parts)),
-        ("Quality", f'<span class="status {worst}"><span class="dot"></span>{_esc(fmt.quality_label(worst))}</span>',
-         qc_sub),
+        ("Quality", f'<span class="status {worst}"><span class="dot"></span>'
+                    f'{_esc(fmt.quality_label(worst))}</span>', qc_sub),
     ]
-    kpi_html = "".join(f'<div class="kpi"><div class="k">{_esc(k)}</div>'
-                       f'<div class="v{" text" if k in ("Main territory", "Main location", "Quality", "Side", "Tissue") else ""}"'
-                       f'{"" if k == "Quality" else " title=" + chr(34) + _esc(v) + chr(34)}>'
-                       f'{v if k in ("Quality",) else _esc(v)}</div><div class="s">'
-                       f'{s if k == "Side" else _esc(s)}</div></div>' for k, v, s in kpis)
-    desc = "".join(f'<p><span class="h">{_esc(h)}</span>{_emph(p)}</p>' for h, p in _desc_sections(res))
+    kpi_html = "".join(
+        f'<div class="kpi"><div class="k">{_esc(k)}</div>'
+        f'<div class="v{" text" if k != "Size" else ""}"'
+        f'{"" if k == "Quality" else " title=" + chr(34) + _esc(v) + chr(34)}>'
+        f'{v if k == "Quality" else _esc(v)}</div><div class="s">'
+        f'{s if k == "Side" else _esc(s)}</div></div>' for k, v, s in kpis)
+    secs = _desc_sections(res)
+    desc = "".join(f'<p><span class="h">{_esc(h)}</span>{_emph(p, gloss=True)}</p>' for h, p in secs)
+    plain = "\n\n".join(p.replace("**", "") for _, p in secs)
+    copy = ('<button type="button" class="btn small tools" data-copy="desc-plain" '
+            'title="Copy the description as plain text">Copy text</button>') if secs else ""
     figs = []
-    if res.get("glass_uri") or res.get("glass_uri_light"):
-        figs.append(f'<figure>{_plates(res.get("glass_uri"), res.get("glass_uri_light"), "Glass-brain projections of the lesion", "img-glass")}'
-                    '<figcaption>Glass-brain projections (left, right, top, front)</figcaption></figure>')
-    if res.get("slices_uri") or res.get("slices_uri_light"):
-        figs.append(f'<figure>{_plates(res.get("slices_uri"), res.get("slices_uri_light"), "Orthogonal slices through the lesion centre", "img-slices")}'
-                    f'<figcaption>Slices through the lesion centre ({", ".join(str(c) for c in m["center_of_mass_mm"])} mm)</figcaption></figure>')
-    top = f'<div class="cols"><section class="card desc"><h2>Description</h2>{desc or "<p>No description.</p>"}</section>'
-    top += f'<section class="card"><h2>Lesion</h2><div class="figs">{"".join(figs) or "<p class=note>No figures (plots were off).</p>"}</div></section></div>'
-    quality = (f'<section class="card"><h2>Quality</h2>{_flags_html(flags)}</section>' if flags else "")
+    if res.get("glass_svg"):
+        figs.append(f'<figure>{_plate(res["glass_svg"], "fig-glass")}'
+                    '<figcaption>Projections through the brain: from the left, the front and above'
+                    '</figcaption></figure>')
+    if res.get("slices_svg"):
+        cut = ", ".join(f"{c:.0f}" for c in m["center_of_mass_mm"])
+        figs.append(f'<figure>{_plate(res["slices_svg"], "fig-slices")}'
+                    f'<figcaption>Slices through the lesion centre ({cut} mm)</figcaption></figure>')
+    top = (f'<div class="cols"><section class="card desc" aria-label="Description"><h2>Description{copy}</h2>'
+           f'{desc or "<p>No description.</p>"}<div id="desc-plain" hidden>{_esc(plain)}</div></section>')
+    top += (f'<section class="card" aria-label="Figures"><h2>Lesion</h2><div class="figs">'
+            f'{"".join(figs) or "<p class=note>No figures (plots were off).</p>"}</div></section></div>')
+    quality = (f'<section class="card" aria-label="Quality"><h2>Quality</h2>{_flags_html(flags)}</section>'
+               if flags else "")
 
     comp = "".join(_row(n, v, "") for n, v in _composition(facts)[:9])
     dmg = "".join(_row(r["name"], r["dmg"], "dmg",
                        (f'<span class="chip">{_esc(r["function"])}</span>' if r.get("function") else "")
-                       + ('<small>white matter</small>' if r.get("wm") else "")) for r in _damaged(facts))
+                       + ('<small>white matter</small>' if r.get("wm") else ""), hl=r.get("hl"))
+                  for r in _damaged(facts))
     terr = "".join(_row(n, v, "", '<span class="chip">deep</span>' if deep else "")
-                   for n, v, deep in _territories(facts, short=True))
+                   for n, v, deep in _territories(facts))
+    if bz.get("zones"):
+        z = bz["zones"][0]
+        lead = "<b>Fits a border-zone pattern.</b> " if bz.get("fits") else ""
+        terr += (f'<p class="note" style="margin:8px 0 0">{lead}'
+                 f'{bz.get("pct_in_border_zones", 0):.0f}% in border zones (mainly the {_esc(z["label"])}).</p>')
     where = ""
     if comp or dmg or terr:
         where = ('<div class="section-title">Where the lesion is</div><div class="cols3">'
@@ -732,20 +621,11 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
                  f'<section class="card"><h2>Most damaged structures</h2><div class="legend"><span><i style="background:var(--lesion)"></i>percent of the structure damaged</span></div><div class="rows">{dmg}</div></section>'
                  f'<section class="card"><h2>Vascular territories</h2><div class="legend"><span><i style="background:var(--comp)"></i>percent of the lesion</span></div><div class="rows">{terr or "<p class=note>No territory data.</p>"}</div></section>'
                  "</div>")
+    nearby = _nearby_card(res)
+    viewer_card, viewer_tail = _viewer(res)
 
-    details = "".join(_atlas_details(a, f"a{i}") for i, a in enumerate(res["atlases"]))
-    tr = res.get("tracts")
-    if tr:
-        trs = _records(tr["df"])
-        rows = "".join(f'<tr><td>{_esc(r["Tract"])}</td><td class="n">{r["PercentOverlap"]:.1f}%'
-                       f'{_bar(r["PercentOverlap"], "dmg")}</td><td class="n">{r["PercentOfLesion"]:.1f}%</td></tr>'
-                       for r in trs[:25])
-        details += ('<details class="card"><summary><span class="t">White-matter tracts (voxel-overlap proxy)'
-                    f'</span><span class="s">{len(trs)} tracts touched · not streamline disconnection</span>'
-                    '</summary><div class="inner"><p class="note">Percent of each tract\'s voxels the lesion '
-                    'touches: a coarse proxy. A small lesion can cut a tract while touching few of its voxels.</p>'
-                    '<div class="tablewrap"><table><thead><tr><th>Tract</th><th class="n">% of tract voxels</th>'
-                    f'<th class="n">% of lesion</th></tr></thead><tbody>{rows}</tbody></table></div></div></details>')
+    details = "".join(_atlas_details(a) for a in res["atlases"])
+    details += _tracts_details(res)
     disc = res.get("disconnection")
     dmod = next((x for x in manifest.get("modules", []) if x["id"] == "disconnection"), None)
     if disc is not None:
@@ -756,7 +636,7 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
                        f'{r["n_disconnected"]:,} / {r["n_streamlines"]:,}</td></tr>' for r in hit[:25])
         details += ('<details class="card" open><summary><span class="t">Streamline disconnection</span>'
                     f'<span class="s">{len(hit)} tracts with disconnected streamlines</span></summary>'
-                    '<div class="inner"><div class="tablewrap"><table><thead><tr><th>Tract</th>'
+                    '<div class="inner"><div class="tablewrap"><table data-table="disconnection"><thead><tr><th>Tract</th>'
                     '<th class="n">% streamlines cut</th><th class="n">Cut / total</th></tr></thead>'
                     f'<tbody>{rows}</tbody></table></div><p class="note">Method after Griffis et al., '
                     'NeuroImage: Clinical 2021.</p></div></details>')
@@ -765,14 +645,18 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
                     f'<span class="s">not included: {_esc(dmod.get("reason") or dmod["status"])}</span>'
                     '</summary><div class="inner"><p class="note">Build a disconnection index with '
                     '<code>tools/build_discon_index.py</code> to add this section.</p></div></details>')
+    details += _mirror_card(res)
+    dl_card, dl_data = _downloads(downloads)
+    report_name = f"{name}_report.html"
 
     dash = (f'<div class="dash">{hero}<div class="kpis">{kpi_html}</div>{top}{quality}{where}'
+            f'{nearby}{viewer_card}'
             f'<div class="section-title">Details</div>{details}'
-            f'{_extras_card(res, manifest)}{_about(manifest)}</div>')
+            f'{_extras_card(res, manifest)}{dl_card}{_about(manifest, run, report_name)}</div>')
 
-    # ---------------- clinical ----------------
     clin = _clinical_single(res, manifest, m, facts, flags, ts, name, src)
-    return _page(f"LQTpy · {name}", dash, clin, subtitle="Lesion report")
+    tail = (_json_script("lqtpy-run", run) if run else "") + dl_data + viewer_tail
+    return _page(f"LQTpy · {name}", dash, clin, subtitle="Lesion report", tail=tail)
 
 
 def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
@@ -782,9 +666,12 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
         sec[0] += 1
         return f'<h2><span class="no">{sec[0]}</span>{_esc(title)}{extra}</h2>'
 
-    meta = [("Lesion", name), ("Source file", src or "in-memory image"), ("Generated", ts),
+    meta = [("Lesion", name), ("Source file", src or "not recorded"), ("Generated", ts),
             ("Scope", "Core + extras" if manifest.get("scope") != "core" else "Core only"),
             ("Software", f"lqtpy {manifest.get('lqtpy_version', '')}")]
+    sha = (manifest.get("input") or {}).get("sha256")
+    if sha:
+        meta.append(("Input checksum", f"SHA-256 {sha[:16]}…"))
     prof = (manifest.get("settings") or {}).get("profile")
     if prof:
         meta.append(("Description profile", prof))
@@ -793,9 +680,10 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
            '<table class="meta"><tbody>' + "".join(
                f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in meta) + "</tbody></table>"]
     out.append(h2("Findings"))
-    for h, p in _desc_sections(res):
+    secs = _desc_sections(res)
+    for _, p in secs:
         out.append(f"<p>{_emph(p)}</p>")
-    if not _desc_sections(res):
+    if not secs:
         out.append("<p>No description was generated.</p>")
     out.append(h2("Mask quality"))
     warn = [f for f in flags if f["severity"] != "info"]
@@ -827,7 +715,8 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
                    f'(reaching a structure = within {tis.get("contact_mm", 3):g} mm of it in the template)</p>'
                    '<table><thead><tr><th>Part</th><th class="n">cm³</th><th>Tissue</th><th>Location</th>'
                    '<th class="n">To ventricle</th><th class="n">To cortex</th></tr></thead><tbody>'
-                   + "".join(f'<tr><td>{pt["id"]}</td><td class="n" data-sort="{pt["volume_mm3"]}">{fmt.volume_num(pt["volume_mm3"])}</td>'
+                   + "".join(f'<tr><td>{pt["id"]}</td><td class="n" data-sort="{pt["volume_mm3"]}">'
+                             f'{fmt.volume_num(pt["volume_mm3"])}</td>'
                              f'<td>{_esc(pt.get("tissue_class") or "—")}</td>'
                              f'<td>{_esc(pt["class"])}</td><td class="n">{pt["dist_ventricle_mm"]:.0f} mm</td>'
                              f'<td class="n">{pt["dist_cortex_mm"]:.0f} mm</td></tr>' for pt in shown)
@@ -856,23 +745,40 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
                        + "".join(f'<tr><td>{_esc(n)}{" (deep perforator)" if deep else ""}</td>'
                                  f'<td class="n">{v:.1f}%</td></tr>' for n, v, deep in terrs)
                        + f'</tbody></table><p class="fine">{_TERR_LEGEND}</p>')
+        near = [r for r in res.get("key_structures") or [] if r["DistanceMM"] <= 10]
+        if near:
+            out.append('<p class="fine" style="margin-top:3mm">Key structures within 10 mm</p>'
+                       '<table><thead><tr><th>Structure</th><th class="n">Distance</th></tr></thead><tbody>'
+                       + "".join(f'<tr><td>{_esc(r["Structure"])}</td><td class="n">'
+                                 f'{"reaches it" if r["Reaches"] else str(round(r["DistanceMM"])) + " mm"}</td></tr>'
+                                 for r in near) + "</tbody></table>")
+        cross = [r for r in res.get("cross_section") or [] if r["MaxCrossSectionLoad"] >= 10][:8]
+        if cross:
+            out.append('<p class="fine" style="margin-top:3mm">White-matter tracts: largest share of a '
+                       'cross-section covered</p><table><thead><tr><th>Tract</th><th class="n">Max cross-section</th>'
+                       '<th class="n">Narrowest</th><th class="n">% of tract voxels</th></tr></thead><tbody>'
+                       + "".join(f'<tr><td>{_esc(r["Tract"])}</td><td class="n">{r["MaxCrossSectionLoad"]:.0f}%</td>'
+                                 f'<td class="n">{r["BottleneckLoad"]:.0f}%</td>'
+                                 f'<td class="n">{r["PercentOverlap"]:.1f}%</td></tr>' for r in cross)
+                       + "</tbody></table>")
     figs = []
     k = 0
-    if res.get("glass_uri"):
+    if res.get("glass_svg"):
         k += 1
-        figs.append(f'<figure><div class="plate">{_borrow("img-glass", "Glass-brain projections")}</div>'
-                    f"<figcaption>Figure {k}. Glass-brain projections of the lesion.</figcaption></figure>")
-    if res.get("slices_uri"):
+        figs.append('<figure><div class="plate" data-copy-from="fig-glass"></div>'
+                    f"<figcaption>Figure {k}. Projections of the lesion through the brain (from the left, "
+                    "the front and above).</figcaption></figure>")
+    if res.get("slices_svg"):
         k += 1
-        figs.append(f'<figure><div class="plate">{_borrow("img-slices", "Orthogonal slices")}</div>'
+        figs.append('<figure><div class="plate" data-copy-from="fig-slices"></div>'
                     f"<figcaption>Figure {k}. Orthogonal slices through the lesion's centre of mass."
                     "</figcaption></figure>")
-    for i, a in enumerate(res["atlases"]):
-        if a.get("flat_uris") and a["key"] == "dk":
-            k += 1
-            figs.append(f'<figure>{_borrow(f"a{i}-flat0", "DKT cortical damage map")}'
-                        f"<figcaption>Figure {k}. Percent of each DKT cortical region damaged."
-                        "</figcaption></figure>")
+    for a in res["atlases"]:
+        for cap, svg in a.get("flat_svgs") or []:
+            if a["key"] == "dk":
+                k += 1
+                figs.append(f"<figure>{svg}<figcaption>Figure {k}. Percent of each DKT cortical region "
+                            "damaged.</figcaption></figure>")
     if figs:
         out.append(h2("Figures"))
         out += figs
@@ -889,13 +795,18 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
     if notrun:
         out.append('<p class="fine"><strong>Not included:</strong> ' + "; ".join(
             f'{_esc(x["label"])} ({_esc(x.get("reason") or x["status"])})' for x in notrun) + ".</p>")
+    env = ((manifest.get("run") or {}).get("environment") or {})
+    if env:
+        out.append('<p class="fine"><strong>Software:</strong> ' + ", ".join(
+            f"{_esc(k)} {_esc(v)}" for k, v in env.items() if k != "platform") + ".</p>")
     out.append('<p class="fine">Voxels above the threshold count as lesion. Physical measures use the '
                'image affine; region overlap resamples the mask onto each atlas grid (nearest '
                'neighbour). Atlases: AAL (Tzourio-Mazoyer 2002), Schaefer-100 (Schaefer 2018), DKT31 '
                '(Klein &amp; Tourville 2012), JHU ICBM-DTI-81 (Mori 2008), arterial territories '
                '(Liu 2023); tissue classes from DKT31 and the ICBM 2009a white-matter map (Fonov '
-               '2011). Location classes (periventricular, juxtacortical, ...) are template-based. Functional labels describe location only, not symptoms. This report is '
-               'generated automatically and is not a clinical diagnosis.</p>')
+               '2011); tracts from HCP842 (Yeh 2018). Location classes, border zones and distances are '
+               'template-based and approximate. Functional labels describe location only, not '
+               'symptoms. This report is generated automatically and is not a clinical diagnosis.</p>')
     out.append("</article>")
     return "".join(out)
 
@@ -903,7 +814,7 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
 # =========================================================================== #
 # Group
 # =========================================================================== #
-def _group_rows(recs, key, limit=10, name_fn=None, skip=(), title_fn=None) -> str:
+def _group_rows(recs, key, limit=10, name_fn=None, skip=(), title_fn=None, hl_prefix=None) -> str:
     """Cohort-mean rows; bars scaled to the largest value in the list so
     small group means stay readable (the printed number is absolute)."""
     rows = [r for r in _records(recs) if r[key] not in skip][:limit]
@@ -915,25 +826,30 @@ def _group_rows(recs, key, limit=10, name_fn=None, skip=(), title_fn=None) -> st
         out.append(_row(nm, r[col], "dmg",
                         f'<span class="chip">{r["NSubjects"]}/{r["NSubjectsTotal"]}</span>',
                         max_value=top, digits=1, title=title_fn(r[key]) if title_fn else None,
-                        key=f"{key}:{r[key]}"))
+                        hl=f"{hl_prefix}|{r[key]}" if hl_prefix else None))
     return "".join(out)
 
 
-def _group_table(recs, key, label, limit=30) -> str:
+def _group_table(recs, key, label, limit=30, table_id=None, hl_prefix=None, name_fn=None) -> str:
     recs = _records(recs)
     if not recs:
         return '<p class="note">No overlap in this group.</p>'
     suffix = "Overlap" if "CohortMeanPercentOverlap" in recs[0] else "Damage"
-    body = "".join(
-        f'<tr><td>{_esc(r[key])}</td><td class="n">{r["NSubjects"]}/{r["NSubjectsTotal"]}</td>'
-        f'<td class="n">{r[f"CohortMeanPercent{suffix}"]:.1f}%{_bar(r[f"CohortMeanPercent{suffix}"], "dmg")}</td>'
-        f'<td class="n">{r[f"MeanPercent{suffix}Affected"]:.1f}%</td><td class="n">{r[f"MaxPercent{suffix}"]:.1f}%</td></tr>'
-        for r in recs[:limit])
+    body = []
+    for r in recs[:limit]:
+        hl = f' data-hl="{_esc(hl_prefix)}|{_esc(r[key])}" tabindex="0"' if hl_prefix else ""
+        cm = r[f"CohortMeanPercent{suffix}"]
+        body.append(f'<tr{hl}><td>{_esc(name_fn(r[key]) if name_fn else r[key])}</td>'
+                    f'<td class="n">{r["NSubjects"]}/{r["NSubjectsTotal"]}</td>'
+                    f'<td class="n">{cm:.1f}%{_bar(cm, "dmg")}</td>'
+                    f'<td class="n">{r[f"MeanPercent{suffix}Affected"]:.1f}%</td>'
+                    f'<td class="n">{r[f"MaxPercent{suffix}"]:.1f}%</td></tr>')
     more = f'<p class="note">Showing {limit} of {len(recs)}; all rows are in the CSV.</p>' if len(recs) > limit else ""
-    return ('<div class="tablewrap"><table><thead><tr>'
+    tid = f' data-table="{_esc(table_id)}"' if table_id else ""
+    return (f'<div class="tablewrap"><table{tid}><thead><tr>'
             f'<th>{_esc(label)}</th><th class="n">Subjects</th><th class="n">Mean, all subjects</th>'
             '<th class="n">Mean, affected</th><th class="n">Max</th></tr></thead>'
-            f"<tbody>{body}</tbody></table></div>{more}")
+            f'<tbody>{"".join(body)}</tbody></table></div>{more}')
 
 
 def _group_tissue_kpi(classes: dict, n: int) -> list:
@@ -944,97 +860,272 @@ def _group_tissue_kpi(classes: dict, n: int) -> list:
     return [("Tissue", order[0][0], f"{order[0][1]} of {n}" + (f" · {rest}" if rest else ""))]
 
 
-def render_group(res: dict, style: "ReportStyle | None" = None) -> str:
+def _yeo_names() -> dict:
+    try:
+        from ..atlases import _YEO7_NAMES
+        return dict(_YEO7_NAMES)
+    except Exception:
+        return {}
+
+
+def _categorical(subjects, col) -> "list[str] | None":
+    raw = [s["meta"].get(col, "") for s in subjects if str(s["meta"].get(col, "")) != ""]
+    if raw and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw):
+        return None  # numbers (age, scores) are columns to sort, not chips
+    uniq = sorted({str(v) for v in raw})
+    return uniq if 1 < len(uniq) <= 8 else None
+
+
+def _filters(subjects, meta_cols) -> "tuple[str, list[tuple[str, str]]]":
+    """Filter bar html, and [(field id, metadata column)] used by rows."""
+    groups = []
+
+    def chips(field, label, values):
+        if len(values) < 2:
+            return ""
+        b = "".join(f'<button type="button" class="fchip" data-f="{_esc(field)}" data-v="{_esc(v)}" '
+                    f'aria-pressed="false">{_esc(v)}</button>' for v in values)
+        return (f'<span class="fgroup" role="group" aria-label="{_esc(label)}">'
+                f'<span class="lab">{_esc(label)}</span>{b}</span>')
+
+    qs = [q for q in ("OK", "Note", "Check", "Problem")
+          if any(fmt.quality_label(s.get("qc_worst") or "ok") == q for s in subjects)]
+    groups.append(chips("qc", "Quality", qs))
+    groups.append(chips("terr", "Territory", sorted({s.get("territory") or "—" for s in subjects})[:12]))
+    groups.append(chips("tissue", "Tissue", sorted({(s.get("tissue") or {}).get("class") or "—"
+                                                    for s in subjects})))
+    mfields = []
+    for i, c in enumerate(meta_cols):
+        vals = _categorical(subjects, c)
+        if vals:
+            mfields.append((f"m{i}", c))
+            groups.append(chips(f"m{i}", c, vals))
+    bar = ('<div class="filters"><input type="search" id="subj-search" placeholder="Search subjects" '
+           'aria-label="Search subjects">' + "".join(g for g in groups if g)
+           + '<button type="button" class="btn small" id="subj-clear">Clear</button>'
+             '<span class="shown" id="subj-shown" aria-live="polite"></span></div>')
+    return bar, mfields
+
+
+def _comparison_section(cmp_: "dict | None") -> str:
+    if not cmp_:
+        return ""
+    a, b = cmp_["a"], cmp_["b"]
+    maps = ""
+    svgs = cmp_.get("overlap_svgs") or {}
+    if svgs:
+        cells = []
+        for g, n in ((a, cmp_["n_a"]), (b, cmp_["n_b"])):
+            s = svgs.get(g)
+            if s:
+                cells.append(f'<figure><div class="plate"><div class="theme-img dark-img">{s["dark"]}</div>'
+                             f'<div class="theme-img light-img">{s["light"]}</div></div>'
+                             f'<figcaption>{_esc(cmp_["column"])} = {_esc(g)} (n = {n})</figcaption></figure>')
+        maps = f'<div class="cols2">{"".join(cells)}</div>'
+    tables = []
+    for t in cmp_["tables"]:
+        rows = t["rows"][:20]
+        body = "".join(
+            f'<tr><td>{_esc(r["Name"])}</td>'
+            f'<td class="n">{r["NAffectedA"]}/{r["NA"]}</td><td class="n">{r["MeanA"]:.1f}%</td>'
+            f'<td class="n">{r["NAffectedB"]}/{r["NB"]}</td><td class="n">{r["MeanB"]:.1f}%</td>'
+            f'<td class="n">{r["DiffMean"]:+.1f}</td><td class="n">{r["PMannWhitney"]:.3g}</td>'
+            f'<td class="n">{r["QMannWhitney"]:.3g}</td><td class="n">{r["PFisher"]:.3g}</td></tr>'
+            for r in rows)
+        more = (f'<p class="note">Top 20 of {len(t["rows"])}; all rows are in the CSV.</p>'
+                if len(t["rows"]) > 20 else "")
+        tables.append(
+            f'<details class="card"{" open" if not tables else ""}><summary><span class="t">{_esc(t["label"])}</span>'
+            f'<span class="s">{len(t["rows"])} rows · sorted by Mann-Whitney p</span></summary><div class="inner">'
+            f'<div class="tablewrap"><table data-table="compare-{_esc(t["key"])}"><thead><tr><th>Structure</th>'
+            f'<th class="n">{_esc(a)}: affected</th><th class="n">{_esc(a)}: mean</th>'
+            f'<th class="n">{_esc(b)}: affected</th><th class="n">{_esc(b)}: mean</th>'
+            '<th class="n">Diff.</th><th class="n">p (MW)</th><th class="n">q (MW)</th><th class="n">p (Fisher)</th>'
+            f'</tr></thead><tbody>{body}</tbody></table></div>{more}</div></details>')
+    return (f'<div class="section-title">Comparison: {_esc(cmp_["column"])} = {_esc(a)} (n = {cmp_["n_a"]}) '
+            f'vs {_esc(b)} (n = {cmp_["n_b"]})</div>'
+            '<section class="card"><h2>Lesion overlap by group</h2>'
+            f'{maps}<p class="note">Means count unaffected subjects as 0. p (MW): Mann-Whitney U on percent '
+            'damaged; q: Benjamini-Hochberg FDR; p (Fisher): affected vs not. A screening comparison, '
+            'not a lesion-symptom mapping analysis (no covariates or lesion-volume correction).</p></section>'
+            + "".join(tables))
+
+
+def _cohort_quality_card(res) -> str:
+    dups = res.get("duplicates") or []
+    outl = res.get("outliers") or {}
+    unmatched = res.get("metadata_unmatched") or []
+    if not dups and not outl and not unmatched:
+        return ""
+    items = []
+    for d in dups:
+        dice = f" (Dice {d['dice']:.2f})" if d["kind"] != "identical" else ""
+        items.append({"severity": "warn", "message": f"{d['a']} and {d['b']} are {d['kind']} masks{dice}.",
+                      "suggestion": "Check for a duplicated file."})
+    for nm, its in outl.items():
+        for it in its:
+            items.append({"severity": "warn", "message": f"{nm}: {it['message']}", "suggestion": ""})
+    if unmatched:
+        items.append({"severity": "info",
+                      "message": f"{len(unmatched)} metadata row(s) matched no subject: "
+                                 + ", ".join(unmatched[:6]) + ("…" if len(unmatched) > 6 else ""),
+                      "suggestion": ""})
+    return f'<section class="card" aria-label="Cohort checks"><h2>Cohort checks</h2>{_flags_html(items)}</section>'
+
+
+def _groups_card(res) -> str:
+    groups = res.get("groups")
+    if not groups:
+        return ""
+    rows = "".join(f'<tr><td>{_esc(g["value"])}</td><td class="n">{g["n"]}</td>'
+                   f'<td class="n" data-sort="{g["median_volume_mm3"]}">{fmt.volume(g["median_volume_mm3"])}</td>'
+                   f'<td class="n">{g["n_left"]}</td><td class="n">{g["n_bilateral"]}</td>'
+                   f'<td>{_esc(g["top_territory"] or "—")}</td><td class="n">{g["n_flagged"]}</td></tr>'
+                   for g in groups)
+    return (f'<section class="card"><h2>By {_esc(res["group_by"])}</h2><div class="tablewrap">'
+            '<table data-table="groups"><thead><tr><th>Group</th><th class="n">Subjects</th>'
+            '<th class="n">Median volume</th><th class="n">Mostly left</th><th class="n">Bilateral</th>'
+            f'<th>Most common territory</th><th class="n">To check</th></tr></thead><tbody>{rows}</tbody>'
+            '</table></div></section>')
+
+
+def _lobe_label(x):
+    return fmt.lobe_word(x, short=True, capital=True)
+
+
+def render_group(res: dict, style: "ReportStyle | None" = None, *, run: "dict | None" = None,
+                 downloads: "dict | None" = None) -> str:
     """The group report (dashboard + clinical views in one file)."""
     manifest = res.get("manifest") or {}
+    run = run or manifest.get("run")
     n = res["n_subjects"]
     subjects = res["subjects"]
+    for s in subjects:
+        s.setdefault("meta", {})
     ts = res.get("timestamp", datetime.datetime.now().isoformat(timespec="seconds"))
-    vols = sorted(s["morphometry"]["volume_cc"] for s in subjects)
+    vols = sorted(s["morphometry"]["volume_mm3"] for s in subjects)
     by = {a["key"]: a for a in res["atlases"]}
+    meta_cols = res.get("metadata_columns") or []
 
     hero = (f'<div class="hero"><div><h1>Group report</h1><div class="meta">{n} subjects · '
             f'{_esc(ts)} · analysed in {_esc(res.get("elapsed", "?"))}</div></div>'
             f'<span class="spacer"></span>{_scope_pill(manifest)}<span class="pill">Group</span></div>')
     q = res.get("n_subjects_with_warnings", 0)
-    kpis = [("Subjects", str(n), ""),
-            ("Median volume", f'{res["median_volume_cc"]} cm³', f"range {vols[0]}–{vols[-1]} cm³"),
+    med = res.get("median_volume_mm3", res.get("median_volume_cc", 0) * 1000)
+    kpis = [("Subjects", str(n), f"{len(meta_cols)} metadata columns" if meta_cols else ""),
+            ("Median volume", fmt.volume(med), f"range {fmt.volume_num(vols[0])}–{fmt.volume(vols[-1])}"),
             ("Max overlap", f'{res["max_overlap"]} of {n}', "subjects at the most shared voxel"),
             ("Bilateral", f'{res.get("n_bilateral", 0)} of {n}', "lesions in both hemispheres"),
             *_group_tissue_kpi(res.get("tissue_classes") or {}, n),
             ("Quality", f'<span class="status {"warn" if q else "ok"}"><span class="dot"></span>'
-                        f'{q} of {n} to check</span>', "mask quality checks")]
+                        f'{fmt.quality_label("warn" if q else "ok")}</span>',
+             f"{q} of {n} masks flagged" if q else "all masks passed")]
     kpi_html = "".join(f'<div class="kpi"><div class="k">{_esc(k)}</div>'
                        f'<div class="v{" text" if k in ("Tissue", "Quality") else ""}">'
                        f'{v if k == "Quality" else _esc(v)}</div><div class="s">{_esc(s)}</div></div>'
                        for k, v, s in kpis)
     overlap = ""
-    if res.get("overlap_uri") or res.get("overlap_uri_light"):
-        overlap = (f'<section class="card"><h2>Lesion overlap</h2>'
-                   f'{_plates(res.get("overlap_uri"), res.get("overlap_uri_light"), "Lesion overlap map", "img-overlap")}'
-                   '<figcaption>Number of subjects with a lesion at each voxel (axial slices).'
-                   '</figcaption></section>')
+    ov = res.get("overlap_svgs")
+    if ov:
+        overlap = ('<section class="card" aria-label="Lesion overlap"><h2>Lesion overlap</h2><div class="plate">'
+                   f'<div class="theme-img dark-img">{ov["dark"]}</div><div class="theme-img light-img">'
+                   f'{ov["light"]}</div></div><figcaption>Number of subjects with a lesion at each voxel '
+                   '(axial slices).</figcaption></section>')
+
+    filt, mfields = _filters(subjects, meta_cols)
+    show_meta = meta_cols[:4]
+    has_thumbs = any(x.get("thumb") for x in subjects)
     subj_rows = []
     for s in subjects:
         mm = s["morphometry"]
         nm = _esc(s["name"])
         if s.get("report_path"):
             nm = f'<a href="{_esc(s["report_path"].replace(chr(92), "/"))}">{nm}</a>'
-        qw = _qc_worst(s.get("qc"))
-        qlabel = {"ok": "ok", "warn": "check", "error": "problem"}[qw]
-        ids = ", ".join(sorted({f["id"].replace("_", " ") for f in s.get("qc", [])
-                                if f["severity"] != "info"}))
-        mini = (f'<span class="mini" aria-label="{mm["pct_left"]:.0f}% left"><span class="l" '
-                f'style="width:{mm["pct_left"]}%"></span><span class="r" style="width:{mm["pct_right"]}%">'
+        qw = s.get("qc_worst") or "ok"
+        qall = s.get("qc_all", s.get("qc", []))
+        ids = ", ".join(sorted({f["id"].replace("_", " ") for f in qall if f["severity"] != "info"}))
+        mini = (f'<span class="mini" role="img" aria-label="{mm["pct_left"]:.0f}% left, {mm["pct_right"]:.0f}% right">'
+                f'<span class="l" style="width:{mm["pct_left"]}%"></span><span class="r" style="width:{mm["pct_right"]}%">'
                 "</span></span>")
+        thumb = ""
+        if has_thumbs:
+            thumb = (f'<td><img class="thumb" src="{s["thumb"]}" alt="{_esc(s["name"])}, seen from above"></td>'
+                     if s.get("thumb") else "<td></td>")
+        fattrs = (f' data-subject="{_esc(s["name"])}" data-f-qc="{_esc(fmt.quality_label(qw))}"'
+                  f' data-f-terr="{_esc(s.get("territory") or "—")}"'
+                  f' data-f-tissue="{_esc((s.get("tissue") or {}).get("class") or "—")}"'
+                  + "".join(f' data-f-{f}="{_esc(s["meta"].get(c, ""))}"' for f, c in mfields))
+        metas = "".join(f'<td>{_esc(s["meta"].get(c, ""))}</td>' for c in show_meta)
+        bzc = '<span class="chip">border zone</span>' if s.get("border_zone") else ""
+        qsort = {"ok": 0, "info": 0, "warn": 1, "error": 2}[qw]
         subj_rows.append(
-            f'<tr><td>{nm}</td><td class="n">{mm["volume_cc"]}</td><td class="n">{mm["n_components"]}</td>'
-            f'<td data-sort="{mm["pct_left"]:.1f}">{mini}</td><td>{_esc(s.get("territory") or "—")}</td>'
+            f'<tr{fattrs}>{thumb}<td>{nm}</td>{metas}<td class="n" data-sort="{mm["volume_mm3"]}">'
+            f'{fmt.volume_num(mm["volume_mm3"])}</td><td class="n">{mm["n_components"]}</td>'
+            f'<td data-sort="{mm["pct_left"]:.1f}">{mini}</td><td>{_esc(s.get("territory") or "—")}{bzc}</td>'
             f'<td>{_esc((s.get("tissue") or {}).get("class") or "—")}</td>'
-            f'<td data-sort="{ {"ok": 0, "warn": 1, "error": 2}[qw]}"><span class="qc-badge {qw}">{qlabel}</span> <span class="muted">{_esc(ids)}</span></td>'
-            f'<td class="muted">{_emph(s.get("summary", ""))}</td></tr>')
-    subj = (f'<section class="card"><h2>Subjects<span class="count">{n}</span></h2>'
-            f'<div class="tablewrap{" scroll" if n > 12 else ""}"><table><thead><tr>'
-            '<th>Subject</th><th class="n">cm³</th><th class="n">Parts</th><th title="percent left">L / R</th>'
+            f'<td data-sort="{qsort}"><span class="qc-badge {qw}">'
+            f'{fmt.quality_label(qw)}</span> <span class="muted">{_esc(ids)}</span></td>'
+            f'<td class="muted">{_emph(s.get("summary_marked") or s.get("summary", ""))}</td></tr>')
+    thumb_h = '<th><span class="sr">Thumbnail</span></th>' if has_thumbs else ""
+    subj = (f'<section class="card" aria-label="Subjects"><h2>Subjects<span class="count">{n}</span></h2>{filt}'
+            f'<div class="tablewrap{" scroll" if n > 12 else ""}"><table data-table="subjects"><thead><tr>'
+            f'{thumb_h}<th>Subject</th>' + "".join(f"<th>{_esc(c)}</th>" for c in show_meta)
+            + '<th class="n">cm³</th><th class="n">Parts</th><th title="percent left">L / R</th>'
             '<th>Main territory</th><th>Tissue</th><th>Quality</th><th>Summary</th></tr></thead><tbody>'
             + "".join(subj_rows) + "</tbody></table></div></section>")
+
+    yeo = _yeo_names()
     cards = []
     if by.get("dk", {}).get("lobe_df"):
-        cards.append(f'<section class="card"><h2>Lobes (DKT)</h2><div class="rows">'
-                     f'{_group_rows(by["dk"]["lobe_df"], "Lobe")}</div></section>')
+        cards.append('<section class="card"><h2>Lobes (DKT)</h2><div class="rows" data-rollup="dk">'
+                     f'{_group_rows(by["dk"]["lobe_df"], "Lobe", name_fn=_lobe_label)}</div></section>')
     if by.get("arterial", {}).get("network_df"):
-        cards.append(f'<section class="card"><h2>Vascular territories</h2><div class="rows">'
-                     f'{_group_rows(by["arterial"]["network_df"], "Network", skip=("Ventricle",), title_fn=lambda k: fmt.TERRITORY_NAMES.get(k, k))}'
-                     "</div></section>")
+        rows = _group_rows(by["arterial"]["network_df"], "Network", skip=("Ventricle",),
+                           title_fn=lambda k: fmt.TERRITORY_NAMES.get(k, k))
+        cards.append('<section class="card"><h2>Vascular territories</h2>'
+                     f'<div class="rows" data-rollup="arterial" data-skip="Ventricle">{rows}</div></section>')
     if by.get("schaefer", {}).get("network_df"):
-        cards.append(f'<section class="card"><h2>Yeo-7 networks</h2><div class="rows">'
-                     f'{_group_rows(by["schaefer"]["network_df"], "Network")}</div></section>')
+        rows = _group_rows(by["schaefer"]["network_df"], "Network", name_fn=lambda k: yeo.get(k, k))
+        cards.append(f'<section class="card"><h2>Yeo-7 networks</h2><div class="rows" data-rollup="schaefer">'
+                     f'{rows}</div></section>')
     where = ""
     if cards:
         where = ('<div class="section-title">Where the lesions are</div>'
                  '<div class="legend"><span><i style="background:var(--lesion)"></i>mean percent damaged, '
-                 'all subjects (bars scaled to the largest value in each list)</span>'
+                 'subjects shown in the table (bars scaled to the largest value in each list)</span>'
                  '<span>chip: subjects affected</span></div>'
                  f'<div class="cols3">{"".join(cards)}</div>')
+    labels = {"dk": {k: _lobe_label(k) for s in subjects for k in (s.get("rollups") or {}).get("dk", {})},
+              "schaefer": yeo, "arterial": {}}
+    filter_data = {"subjects": [{"name": s["name"], "rollups": s.get("rollups") or {}} for s in subjects],
+                   "labels": labels}
+
     details = []
-    for i, a in enumerate(res["atlases"]):
+    for a in res["atlases"]:
         tier = '<span class="tier">EXTRA</span>' if a.get("tier") == "extra" else ""
         extra = ""
-        for key, label in (("lobe_df", "Lobe"), ("network_df", "Network")):
-            if a.get(key):
-                extra += f'<h3 class="section-title">{label}</h3>' + _group_table(a[key], label, label)
+        for k, label in (("lobe_df", "Lobe"), ("network_df", "Network")):
+            if a.get(k):
+                extra += (f'<h3 class="section-title">{label}</h3>'
+                          + _group_table(a[k], label, label, table_id=f"g{k}-{a['key']}",
+                                         name_fn=_lobe_label if k == "lobe_df" else None))
+        regions = _group_table(a["df"], "RegionName", "Region", table_id="gregions-" + a["key"],
+                               hl_prefix=a["key"])
         details.append(f'<details class="card"><summary><span class="t">{_esc(a["name"])}{tier}</span>'
                        f'<span class="s">{len(_records(a["df"]))} regions involved</span></summary>'
-                       f'<div class="inner">{_flatmaps(a, f"g{i}")}{extra}'
-                       f'<h3 class="section-title">Regions</h3>{_group_table(a["df"], "RegionName", "Region")}'
-                       "</div></details>")
+                       f'<div class="inner">{_flatmaps(a)}{extra}'
+                       f'<h3 class="section-title">Regions</h3>{regions}</div></details>')
     if res.get("tracts"):
         details.append('<details class="card"><summary><span class="t">White-matter tracts (voxel-overlap proxy)'
                        '</span><span class="s">not streamline disconnection</span></summary><div class="inner">'
-                       + _group_table(res["tracts"]["df"], "Tract", "Tract") + "</div></details>")
+                       + _group_table(res["tracts"]["df"], "Tract", "Tract", table_id="gtracts")
+                       + "</div></details>")
+    dl_card, dl_data = _downloads(downloads)
     dash = (f'<div class="dash">{hero}<div class="kpis">{kpi_html}</div>'
-            f'{subj}{overlap}{where}'
-            f'<div class="section-title">Details</div>{"".join(details)}{_about(manifest)}</div>')
+            f'{subj}{_cohort_quality_card(res)}{_groups_card(res)}{overlap}{where}'
+            f'{_comparison_section(res.get("comparison"))}'
+            f'<div class="section-title">Details</div>{"".join(details)}{dl_card}'
+            f'{_about(manifest, run, "group_report.html")}</div>')
 
     # clinical
     sec = [0]
@@ -1046,20 +1137,30 @@ def render_group(res: dict, style: "ReportStyle | None" = None) -> str:
     c = ['<article class="doc"><h1>Group lesion report</h1>',
          f'<div class="sub">{n} subjects · generated {_esc(ts)} · lqtpy '
          f'{_esc(manifest.get("lqtpy_version", ""))}</div>', h2("Cohort")]
-    c.append('<table><tbody>' + "".join(f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>" for k, v in [
-        ("Subjects", n), ("Median volume", f'{res["median_volume_cc"]} cm³ (range {vols[0]}–{vols[-1]})'),
-        ("Bilateral lesions", f'{res.get("n_bilateral", 0)} of {n}'),
-        *([("Tissue class", "; ".join(f"{k} {v}" for k, v in (res.get("tissue_classes") or {}).items()))]
-          if res.get("tissue_classes") else []),
-        ("Masks with quality warnings", f"{q} of {n}")]) + "</tbody></table>")
+    cohort_rows = [
+        ("Subjects", n),
+        ("Median volume", f'{fmt.volume(med)} (range {fmt.volume_num(vols[0])}–{fmt.volume(vols[-1])})'),
+        ("Bilateral lesions", f'{res.get("n_bilateral", 0)} of {n}')]
+    if res.get("tissue_classes"):
+        cohort_rows.append(("Tissue class", "; ".join(f"{k} {v}" for k, v in res["tissue_classes"].items())))
+    cohort_rows.append(("Masks flagged for checking", f"{q} of {n}"))
+    if res.get("duplicates"):
+        cohort_rows.append(("Duplicate pairs", len(res["duplicates"])))
+    if res.get("outliers"):
+        cohort_rows.append(("Outliers", ", ".join(res["outliers"])))
+    c.append('<table><tbody>' + "".join(f"<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>"
+                                        for k, v in cohort_rows) + "</tbody></table>")
     c.append(h2("Subjects"))
-    c.append('<table><thead><tr><th>Subject</th><th class="n">cm³</th><th class="n">L/R %</th>'
+    c.append('<table><thead><tr><th>Subject</th>' + "".join(f"<th>{_esc(x)}</th>" for x in show_meta[:2])
+             + '<th class="n">cm³</th><th class="n">L/R %</th>'
              '<th>Main territory</th><th>Tissue</th><th>Quality</th></tr></thead><tbody>' + "".join(
-                 f'<tr><td>{_esc(s["name"])}</td><td class="n">{s["morphometry"]["volume_cc"]}</td>'
+                 f'<tr><td>{_esc(s["name"])}</td>'
+                 + "".join(f"<td>{_esc(s['meta'].get(x, ''))}</td>" for x in show_meta[:2])
+                 + f'<td class="n">{fmt.volume_num(s["morphometry"]["volume_mm3"])}</td>'
                  f'<td class="n">{s["morphometry"]["pct_left"]:.0f}/{s["morphometry"]["pct_right"]:.0f}</td>'
                  f'<td>{_esc(s.get("territory") or "—")}</td>'
                  f'<td>{_esc((s.get("tissue") or {}).get("class") or "—")}</td>'
-                 f'<td>{_esc(_qc_worst(s.get("qc")))}</td></tr>'
+                 f'<td>{_esc(fmt.quality_label(s.get("qc_worst")))}</td></tr>'
                  for s in subjects) + "</tbody></table>")
     c.append(h2("Involvement"))
     for key, df_key, label in (("dk", "lobe_df", "Lobe"), ("arterial", "network_df", "Network"),
@@ -1069,14 +1170,34 @@ def render_group(res: dict, style: "ReportStyle | None" = None) -> str:
             title = {"lobe_df": "Lobes (DKT)", "network_df": "Vascular territories",
                      "df": "Regions (DKT)"}[df_key]
             c.append(f'<p class="fine" style="margin-top:3mm">{title}</p>'
-                     + _group_table(a[df_key], label, label.replace("RegionName", "Region"), limit=15))
-    if res.get("overlap_uri"):
+                     + _group_table(a[df_key], label, label.replace("RegionName", "Region"), limit=15,
+                                    name_fn=_lobe_label if df_key == "lobe_df" else None))
+    cmp_ = res.get("comparison")
+    if cmp_ and cmp_["tables"]:
+        c.append(h2(f"Comparison: {cmp_['column']}"))
+        c.append(f'<p class="fine">{_esc(cmp_["a"])} (n = {cmp_["n_a"]}) vs {_esc(cmp_["b"])} (n = {cmp_["n_b"]}); '
+                 'rows with the smallest Mann-Whitney p first. Screening statistics, not lesion-symptom mapping.</p>')
+        for t in cmp_["tables"][:3]:
+            body = "".join(
+                f'<tr><td>{_esc(r["Name"])}</td><td class="n">{r["MeanA"]:.1f}% ({r["NAffectedA"]}/{r["NA"]})</td>'
+                f'<td class="n">{r["MeanB"]:.1f}% ({r["NAffectedB"]}/{r["NB"]})</td>'
+                f'<td class="n">{r["DiffMean"]:+.1f}</td><td class="n">{r["PMannWhitney"]:.3g}</td>'
+                f'<td class="n">{r["QMannWhitney"]:.3g}</td></tr>' for r in t["rows"][:10])
+            c.append(f'<p class="fine" style="margin-top:3mm">{_esc(t["label"])}</p><table><thead><tr>'
+                     f'<th>Structure</th><th class="n">{_esc(cmp_["a"])}</th><th class="n">{_esc(cmp_["b"])}</th>'
+                     f'<th class="n">Diff.</th><th class="n">p</th><th class="n">q</th></tr></thead><tbody>{body}'
+                     "</tbody></table>")
+    if ov:
         c.append(h2("Figure"))
-        c.append(f'<figure><div class="plate">{_borrow("img-overlap", "Lesion overlap map")}</div>'
+        c.append(f'<figure><div class="plate">{ov["light"]}</div>'
                  "<figcaption>Figure 1. Number of subjects with a lesion at each voxel.</figcaption></figure>")
     c.append(h2("Scope and methods"))
+    ran = [x["label"] for x in manifest.get("modules", []) if x["status"] == "ran"]
+    c.append(f'<p class="fine"><strong>Included:</strong> {_esc(", ".join(ran))}.</p>')
     c.append('<p class="fine">"Mean, all subjects" averages over every subject (unaffected subjects count '
              'as 0); "Mean, affected" averages over affected subjects only. Each subject\'s full report '
              'is linked from the dashboard view. This report is generated automatically and is not a '
              'clinical diagnosis.</p></article>')
-    return _page("LQTpy · group report", dash, "".join(c), subtitle="Group report")
+    tail = ((_json_script("lqtpy-run", run) if run else "")
+            + _json_script("lqtpy-subjects", filter_data) + dl_data)
+    return _page("LQTpy · group report", dash, "".join(c), subtitle="Group report", tail=tail)

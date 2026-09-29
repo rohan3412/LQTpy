@@ -203,7 +203,8 @@ def _hierarchy(mask, atlas, lesion_total: int, grid_affine, wm=None) -> dict:
 def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "stroke",
           qc_flags=None, shape: bool = False, networks: bool = True,
           white_matter: "str | None" = "jhu", territories: "str | None" = "arterial",
-          tissue: bool = True) -> dict:
+          tissue: bool = True, border_zones: bool = True, key_structures: bool = True,
+          homologue: bool = True) -> dict:
     """Structured facts for a description (see module docstring).
 
     ``atlas`` is the anatomical atlas for the hemisphere/lobe/region
@@ -214,7 +215,10 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
     atlas doesn't label (``None`` to skip); ``territories`` the vascular
     territory atlas (``None`` to skip). ``tissue`` adds tissue composition
     and a location class per part (periventricular, juxtacortical, ...; see
-    :mod:`lqtpy.tissue`).
+    :mod:`lqtpy.tissue`). ``border_zones`` adds the share in arterial border
+    zones (:mod:`lqtpy.watershed`), ``key_structures`` the distances to key
+    tracts and cortical areas (:mod:`lqtpy.structures`), ``homologue`` the
+    regions under the lesion's mirror image (:mod:`lqtpy.mirror`).
     """
     from . import qc as _qc
     from .morphometry import compute_morphometry
@@ -309,6 +313,18 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
 
     if territories:
         out["territories"] = _territories(p, territories)
+    if border_zones:
+        from .watershed import border_zones as _bz
+        out["border_zones"] = _bz(p)
+    if key_structures:
+        from . import structures as _st
+        try:
+            out["key_structures"] = _st.distances(p)
+        except Exception:
+            out["key_structures"] = []
+    if homologue:
+        from .mirror import homologue as _hom
+        out["homologue"] = _hom(p)
 
     if networks:
         try:
@@ -427,6 +443,9 @@ def _part_word(name: str, terr: str) -> str:
     word = name.replace(" territory", "")
     if any(w in word for w in _DEEP_WORDS):
         return f"{word} (deep)"
+    if word in _fmt.TERRITORY_NAMES.values():
+        # The atlas doesn't split this territory's cortical part (ACA).
+        return "cortical branches"
     return word
 
 
@@ -563,7 +582,9 @@ def _where_sentence(hemis: "list[dict]", prof: Profile, subject: str, atlas_labe
             sentences.append(f"{_pct(unl)} of it {tail}")
     if regions:
         for side, lb in lobe_list:
-            regs = _named_regions(lb, prof)
+            # "In the brainstem it mainly involves the brainstem" says nothing.
+            regs = [r for r in _named_regions(lb, prof)
+                    if r["name"].lower() != _lobe_word(lb["lobe"]).lower()]
             if regs:
                 where = (f"In the {side} {_lobe_word(lb['lobe'])}" if side in ("left", "right")
                          else f"In the {_lobe_word(lb['lobe'])}")
@@ -807,7 +828,11 @@ def _render(f: dict) -> "list[tuple[str, str]]":
         ts = _territory_sentence(f["territories"],
                                  "The lesions" if prof.name == "small_vessel" and n > 3 else "It")
         if ts:
-            sections.append(("Vascular territory", ts))
+            bz = _border_zone_sentence(f.get("border_zones"))
+            sections.append(("Vascular territory", ts + (f" {bz}" if bz else "")))
+    ks = _key_structure_sentence(f.get("key_structures"))
+    if ks:
+        sections.append(("Nearby structures", ks))
 
     if f.get("functional"):
         items = [_b(f"{x['hemisphere']} {x['function']}") if x["hemisphere"] in ("left", "right")
@@ -846,6 +871,49 @@ _SHAPE_BLOCKERS = {"sparse_slices": "drawn on some slices only",
                    "flat": "drawn on a single slice"}
 
 
+def _border_zone_sentence(bz: "dict | None") -> str:
+    """'Its location fits a border-zone (watershed) pattern: **68% lies in
+    the left MCA-PCA cortical border zone**.' Only when it fits; a smaller
+    share (>= 20%) is mentioned without the pattern claim."""
+    if not bz or not bz.get("zones"):
+        return ""
+    top = bz["zones"][0]
+    if bz.get("n_parts_internal", 0) >= 3:
+        return (f"Its location fits an internal border-zone (watershed) pattern: "
+                f"{_b(str(bz['n_parts_internal']) + ' separate parts lie along the ' + top['hemisphere'] + ' internal border zone')}"
+                " in the deep white matter.")
+    if bz.get("fits"):
+        head = f"{_pct(top['pct_of_lesion'])} lies in the {top['label']}"
+        more = [z for z in bz["zones"][1:] if z["pct_of_lesion"] >= 10]
+        tail = ("; " + _join([f"{_pct(z['pct_of_lesion'])} in the {z['label']}" for z in more])) if more else ""
+        return (f"Its location fits a border-zone (watershed) pattern: {_b(head)}{tail}. "
+                "Border zones are approximate, drawn from the territory atlas.")
+    if bz.get("pct_in_border_zones", 0) >= 20:
+        return f"{_pct(bz['pct_in_border_zones'])} of it lies in arterial border zones ({top['label']})."
+    return ""
+
+
+#: Structures within this distance are named in the description.
+NEAR_STRUCTURE_MM = 5.0
+
+
+def _key_structure_sentence(rows) -> str:
+    """'It reaches the **left corticospinal tract**; the left optic
+    radiation is 3 mm away.'"""
+    if not rows:
+        return ""
+    reach = [r["Structure"] for r in rows if r["Reaches"]]
+    near = [r for r in rows if not r["Reaches"] and r["DistanceMM"] <= NEAR_STRUCTURE_MM]
+    parts = []
+    if reach:
+        parts.append("It reaches the " + _join([_b(x) for x in reach]))
+    if near:
+        items = [f"the {r['Structure']} is {r['DistanceMM']:.0f} mm away" for r in near[:3]]
+        parts.append(("; " if reach else "") + _join(items)[:1].upper() * (not reach)
+                     + (_join(items)[1:] if not reach else _join(items)))
+    return ("".join(parts) + ".") if parts else ""
+
+
 def _cluster_where(c: dict) -> str:
     hemis = c.get("hemispheres") or []
     if not hemis:
@@ -880,7 +948,8 @@ def _shape_predicate(c: dict) -> str:
 def describe(lesion, *, profile: str = "stroke", atlas: str = "dk", threshold: float = 0.5,
              qc_flags=None, shape: bool = False, networks: bool = True,
              white_matter: "str | None" = "jhu", territories: "str | None" = "arterial",
-             tissue: bool = True) -> Description:
+             tissue: bool = True, border_zones: bool = True, key_structures: bool = True,
+             homologue: bool = True) -> Description:
     """A plain-language description of a lesion.
 
     ``profile``: ``stroke`` (default), ``small_vessel``, ``tumour`` or
@@ -893,7 +962,8 @@ def describe(lesion, *, profile: str = "stroke", atlas: str = "dk", threshold: f
         raise ValueError(f"unknown profile {profile!r}; choose from {sorted(PROFILES)}")
     f = facts(lesion, atlas=atlas, threshold=threshold, profile=profile, qc_flags=qc_flags,
               shape=shape, networks=networks, white_matter=white_matter, territories=territories,
-              tissue=tissue)
+              tissue=tissue, border_zones=border_zones, key_structures=key_structures,
+              homologue=homologue)
     marked = _render(f)
     sections = [(h, strip_emphasis(p)) for h, p in marked]
     text = "\n\n".join(p for _, p in sections)

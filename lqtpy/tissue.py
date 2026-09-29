@@ -82,17 +82,20 @@ def distance_maps():
     if _DIST is None:
         with _dist_lock:
             if _DIST is None:
+                from ._diskcache import cached_arrays
                 at = _atlas()
                 lab = at.label_array()
                 aff = np.asarray(at.img.affine, float)
                 zooms = np.linalg.norm(aff[:3, :3], axis=0)
-                out = []
-                for ids in ((1, 2), (7, 8)):
-                    d = ndimage.distance_transform_edt(~np.isin(lab, ids), sampling=zooms)
-                    q = np.minimum(np.round(d * 4), 255).astype(np.uint8)
-                    q.flags.writeable = False
-                    out.append(q)
-                _DIST = (out[0], out[1], aff)
+
+                def build():
+                    out = {}
+                    for k, ids in (("cortex", (1, 2)), ("ventricle", (7, 8))):
+                        d = ndimage.distance_transform_edt(~np.isin(lab, ids), sampling=zooms)
+                        out[k] = np.minimum(np.round(d * 4), 255).astype(np.uint8)
+                    return out
+                maps = cached_arrays("tissue_distance", build)
+                _DIST = (maps["cortex"], maps["ventricle"], aff)
     return _DIST
 
 

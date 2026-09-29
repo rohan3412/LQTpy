@@ -53,7 +53,7 @@ from scipy import ndimage
 from .prepared import PreparedLesion, prepare
 
 __all__ = ["Flag", "check", "gap_evidence", "clusters", "repair_gaps", "clean", "brain_mask",
-           "slice_axis_names", "DEFAULTS"]
+           "slice_axis_names", "DEFAULTS", "check_folder", "clean_folder"]
 
 INFO, WARN, ERROR = "info", "warn", "error"
 _SEVERITY_ORDER = {ERROR: 0, WARN: 1, INFO: 2}
@@ -109,11 +109,19 @@ def brain_mask():
     with _brain_lock:
         if _BRAIN is not None:
             return _BRAIN
+        from ._diskcache import cached_arrays
         from .atlases import load_atlas
-        from .prepared import _nearest_on_grid
 
         dk = load_atlas("dk")
-        aal = load_atlas("aal")
+        f = cached_arrays("brain_mask", lambda: {"mask": _build_brain(dk, load_atlas("aal"))})["mask"]
+        _BRAIN = (f.astype(bool), np.asarray(dk.img.affine, float))
+        _BRAIN[0].flags.writeable = False
+        return _BRAIN
+
+
+def _build_brain(dk, aal):
+    from .prepared import _nearest_on_grid
+    if True:
         d = dk.label_array()
         m = (d > 0) & (d != 24)  # 24 = extra-cerebral CSF
         a = aal.label_array() > 0
@@ -124,10 +132,7 @@ def brain_mask():
         f = ndimage.binary_fill_holes(m | am)
         for z in range(f.shape[2]):   # close sulcal CSF gaps slice by slice
             f[:, :, z] = ndimage.binary_fill_holes(f[:, :, z])
-        f = ndimage.binary_dilation(f, iterations=2)
-        f.flags.writeable = False
-        _BRAIN = (f, np.asarray(dk.img.affine, float))
-        return _BRAIN
+        return ndimage.binary_dilation(f, iterations=2)
 
 
 _DEPTH = None
@@ -257,7 +262,9 @@ def _gap_evidence_axis(sub: np.ndarray, axis: int, max_run: int, opts) -> dict:
     for s0, s1 in segments:
         seg = prof[s0:s1]
         nz = np.flatnonzero(seg)
-        if nz.size < 5:
+        # At least 3 drawn slices spanning 5: a thick-slice native drawing
+        # can have few non-empty slices.
+        if nz.size < 3 or nz[-1] - nz[0] + 1 < 5:
             continue
         seg = seg[nz[0]:nz[-1] + 1]
         off = s0 + nz[0]
@@ -783,3 +790,85 @@ def clean(lesion, *, specks: bool = True, edge: bool = True, threshold: float = 
             {"removed_components": len(drop), "removed_specks": n_specks,
              "removed_edge_fragments": len(drop) - n_specks, "voxels_removed": removed,
              "volume_removed_mm3": round(removed * _voxel_mm3(p), 1)})
+
+
+# --------------------------------------------------------------------------- #
+# Folders
+# --------------------------------------------------------------------------- #
+def check_folder(folder, *, threshold: float = 0.5, recursive: bool = False,
+                 expected_sides: "dict | None" = None) -> "list[dict]":
+    """Run :func:`check` on every lesion file in ``folder``.
+
+    One record per file: ``file`` (path), ``name``, ``worst`` (ok / info /
+    warn / error), ``flags`` (list of flag dicts), ``volume_mm3`` and
+    ``error`` (a message when the file couldn't be read, else None).
+    ``expected_sides`` maps names to "left"/"right" for the flip check."""
+    import os
+    from .formats import is_lesion_file, strip_extension
+    from .morphometry import compute_morphometry
+    files = []
+    if recursive:
+        for root, _, fs in os.walk(folder):
+            files += [os.path.join(root, f) for f in fs if is_lesion_file(f)]
+    else:
+        files = [os.path.join(folder, f) for f in os.listdir(folder) if is_lesion_file(f)]
+    rows = []
+    for path in sorted(files):
+        name = strip_extension(os.path.basename(path))
+        row = {"file": path, "name": name, "worst": "ok", "flags": [], "volume_mm3": None,
+               "error": None}
+        try:
+            p = prepare(path, threshold)
+            fl = check(p, expected_side=(expected_sides or {}).get(name))
+            row["flags"] = [f.to_dict() for f in fl]
+            row["volume_mm3"] = compute_morphometry(p)["volume_mm3"]
+            sev = {f.severity for f in fl}
+            row["worst"] = "error" if ERROR in sev else WARN if WARN in sev else (
+                INFO if INFO in sev else "ok")
+        except Exception as exc:  # one unreadable file must not stop the folder
+            row["error"] = str(exc).splitlines()[0]
+            row["worst"] = "error"
+        rows.append(row)
+    return rows
+
+
+def clean_folder(src, dst, *, specks: bool = True, edge: bool = True, threshold: float = 0.5,
+                 only_flagged: bool = True) -> "list[dict]":
+    """Write cleaned copies (:func:`clean`) of every lesion file in ``src``
+    into ``dst``. Never overwrites: ``dst`` must differ from ``src``, and a
+    file that already exists in ``dst`` is skipped. With ``only_flagged``
+    (default), files with nothing to remove are not copied.
+
+    Returns one record per file: ``file``, ``out`` (written path or None),
+    ``status`` (written / nothing to remove / exists / failed) and the
+    clean report."""
+    import os
+    import nibabel as nib
+    from .formats import is_lesion_file, strip_extension
+    if os.path.abspath(src) == os.path.abspath(dst):
+        raise ValueError("The output folder must differ from the input folder; lqtpy never "
+                         "overwrites masks.")
+    os.makedirs(dst, exist_ok=True)
+    out = []
+    for f in sorted(os.listdir(src)):
+        if not is_lesion_file(f):
+            continue
+        path = os.path.join(src, f)
+        target = os.path.join(dst, strip_extension(f) + ".nii.gz")
+        rec = {"file": path, "out": None, "status": "", "report": None}
+        if os.path.exists(target):
+            rec["status"] = "exists"
+            out.append(rec)
+            continue
+        try:
+            img, rep = clean(path, specks=specks, edge=edge, threshold=threshold)
+            rec["report"] = rep
+            if rep["voxels_removed"] or not only_flagged:
+                nib.save(img, target)
+                rec["out"], rec["status"] = target, "written"
+            else:
+                rec["status"] = "nothing to remove"
+        except Exception as exc:
+            rec["status"] = f"failed: {str(exc).splitlines()[0]}"
+        out.append(rec)
+    return out

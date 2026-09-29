@@ -226,11 +226,8 @@ def _nearest_on_grid(mask, src_affine, bbox, ref_shape, ref_affine) -> np.ndarra
 def _stem(src) -> str:
     if not isinstance(src, (str, os.PathLike)):
         return "lesion"
-    b = os.path.basename(os.fspath(src))
-    for ext in (".nii.gz", ".nii"):
-        if b.endswith(ext):
-            return b[: -len(ext)]
-    return os.path.splitext(b)[0]
+    from .formats import strip_extension
+    return strip_extension(os.path.basename(os.fspath(src)))
 
 
 def prepare(lesion, threshold: float = 0.5, *, name: "str | None" = None) -> PreparedLesion:

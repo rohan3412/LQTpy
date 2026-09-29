@@ -411,6 +411,24 @@ _cache_lock = threading.RLock()
 def _discover_plugins() -> None:
     from . import registry
     registry.discover()
+    _register_downloadable()
+
+
+def _register_downloadable() -> None:
+    """Atlases fetched on request (``lqtpy fetch suit``): listed always,
+    loadable once downloaded."""
+    if "suit" in _CUSTOM:
+        return
+    from . import datasets
+    if not datasets.suit_available():
+        return
+    with _cache_lock:
+        _CUSTOM.setdefault("suit", {
+            "name": "SUIT cerebellar lobules (Diedrichsen 2009)", "img": None, "labels": None,
+            "ggseg": False, "loader": datasets.load_suit, "tier": "extra",
+            "source": "download", "license": "Academic use with citation",
+            "citation": "Diedrichsen J, et al. A probabilistic MR atlas of the human cerebellum. "
+                        "NeuroImage 46(1):39-46, 2009."})
 
 
 def list_atlases() -> list[str]:
@@ -450,6 +468,8 @@ def _build_atlas(key: str) -> Atlas:
         if spec.get("img") is None and spec.get("loader") is not None:
             try:
                 img_src, raw_labels = spec["loader"]()
+            except DataUnavailableError:
+                raise
             except FileNotFoundError as exc:
                 raise DataUnavailableError(f"Atlas '{key}' data missing: {exc}") from exc
             img_obj, norm = _validated_atlas(img_src, raw_labels)
@@ -484,6 +504,10 @@ def load_atlas(key: str) -> Atlas:
         return atlas
     if key not in _REGISTRY and key not in _CUSTOM:
         _discover_plugins()
+        if key == "suit" and key not in _CUSTOM:
+            raise DataUnavailableError(
+                "The cerebellar lobule atlas (suit) isn't downloaded yet. Run `lqtpy fetch suit` "
+                "(or lqtpy.datasets.fetch_suit()) once.")
     with _cache_lock:
         atlas = _CACHE.get(key)
         if atlas is not None:
@@ -620,7 +644,8 @@ def preload(keys: "list[str] | None" = None) -> None:
     atlas doesn't pay the (one-time) load cost. Defaults to every *core*
     atlas plus host-registered ones (plugin atlases load on first use, since
     some fetch data). Also preloads the tract proxy index, the QC brain mask,
-    the tissue distance maps,
+    the tissue distance maps, the border-zone map, the key-structure
+    distance maps,
     and, if one has been built locally, the per-tract disconnection index --
     a no-op, not an error, when it hasn't.
     """
@@ -638,7 +663,16 @@ def preload(keys: "list[str] | None" = None) -> None:
         _qc.brain_mask()  # QC's out-of-brain / MNI checks (~0.6 s once)
     if "tissue" in keys:
         from . import tissue as _tissue
-        _tissue.distance_maps()  # location classes (~1 s once)
+        _tissue.distance_maps()  # location classes
+        if "arterial" in keys:
+            from . import watershed as _ws
+            _ws.zone_map()       # border zones
+        if _tracts.tracts_available() and "dk" in keys:
+            from . import structures as _st
+            for name in _st.KEY_STRUCTURES:
+                _st._distance_map(name)  # key-structure distances
+    # (Each of these is built once per installation and then read from the
+    # disk cache, see lqtpy._diskcache.)
     from . import datasets as _datasets
     _datasets.preload_discon_index()
 

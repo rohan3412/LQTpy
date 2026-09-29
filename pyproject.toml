@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "lqtpy"
 dynamic = ["version"]
-description = "Lcutiepie: fast lesion morphometry and atlas-overlap analysis, with self-contained HTML reports."
+description = "Fast lesion morphometry, atlas overlap, quality checks and plain-language descriptions, with self-contained HTML reports."
 readme = "README.md"
 requires-python = ">=3.9"
 keywords = [
@@ -42,15 +42,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Reports need nothing extra: figures are drawn with numpy. nilearn supplies
+# the slice viewer's script and ggseg the subcortical map geometry; without
+# them those two parts are simply left out.
+report = ["nilearn", "ggseg"]
 tables = ["pandas"]
-plots = ["matplotlib", "nilearn", "pandas", "ggseg"]
+plots = ["matplotlib", "nilearn", "pandas", "ggseg"]   # the old matplotlib figure helpers
 ggseg = ["pandas", "matplotlib"]
-discon = []  # tract_disconnection() is implemented and needs no extra packages
-             # at runtime (numpy/nibabel only); it does need a locally-built
-             # index -- see tools/build_discon_index.py and lqtpy/datasets.py.
-report = ["pandas", "matplotlib", "nilearn", "ggseg"]
-all = ["pandas", "matplotlib", "nilearn", "ggseg"]
-dev = ["pandas", "matplotlib", "nilearn", "ggseg", "pytest", "dipy"]
+formats = ["highdicom"]          # DICOM-SEG input (NRRD and MGZ need nothing)
+pdf = ["pypdf"]                  # merged group PDF bundle
+discon = []  # tract_disconnection() needs no extra packages at runtime, only
+             # a locally-built index -- see tools/build_discon_index.py.
+all = ["pandas", "matplotlib", "nilearn", "ggseg", "pypdf"]
+dev = ["pandas", "matplotlib", "nilearn", "ggseg", "pytest", "dipy", "pypdf", "pillow"]
+
+[project.scripts]
+lqtpy = "lqtpy.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -121,7 +121,7 @@ def test_cli_qc_and_repair(gapped_file, tmp_path, capsys):
     assert main(["repair", gapped_file, "-o", out]) == 0
     assert os.path.exists(out)
     assert main(["qc", out]) == 0
-    assert "No quality problems" in capsys.readouterr().out.splitlines()[-1]
+    assert "Quality   OK" in capsys.readouterr().out
 
 
 def test_cli_describe(gapped_file, capsys):
