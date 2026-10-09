@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,8 +63,13 @@ def pages(out_dir: str) -> "dict[str, str]":
     stroke = syn.img(syn.blobs([((-40, 10, 10), 14), ((-35, -10, 15), 10)]))
     svd = syn.img(syn.blobs([((-20, 10, 20), 3), ((22, -10, 25), 3), ((-28, -30, 28), 4),
                              ((15, 30, 10), 3), ((0, -60, -35), 4)]))
+    # a badly drawn mask, so the graded Quality card (verdict, grades, where) shows
+    gappy = syn.blobs([((-40, 10, 10), 14)])
+    gappy[:, :, 1::2] = False
+    gappy |= syn.sphere((30, -60, 40), 1.5)
     out = {}
-    for name, les, prof in (("stroke", stroke, "stroke"), ("small_vessel", svd, "small_vessel")):
+    for name, les, prof in (("stroke", stroke, "stroke"), ("small_vessel", svd, "small_vessel"),
+                            ("flagged", syn.img(gappy), "stroke")):
         res = lqtpy.analyze_single(les, write=False, plots=True, profile=prof, viewer=False)
         res["name"] = name
         path = os.path.join(out_dir, f"{name}.html")
@@ -92,7 +98,8 @@ def screenshot(html_path: str, png_path: str, state: str) -> str:
     for _attempt in range(2):
         if os.path.exists(out):
             os.remove(out)
-        with tempfile.TemporaryDirectory() as prof:
+        prof = tempfile.mkdtemp(prefix="lqtpy-visual-browser-")
+        try:
             subprocess.run([exe, "--headless=new", "--disable-gpu", f"--user-data-dir={prof}",
                             f"--window-size={WIDTH},{HEIGHT}", "--hide-scrollbars",
                             "--force-device-scale-factor=1", "--virtual-time-budget=3000",
@@ -105,6 +112,9 @@ def screenshot(html_path: str, png_path: str, state: str) -> str:
                     return png_path
                 last = size
                 time.sleep(0.5)
+        finally:
+            # Edge can still hold files in its profile; never fail on cleanup.
+            shutil.rmtree(prof, ignore_errors=True)
     raise RuntimeError(f"no screenshot written for {html_path} ({state})")
 
 

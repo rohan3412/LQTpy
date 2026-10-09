@@ -31,6 +31,7 @@ __all__ = ["LESION_EXTENSIONS", "is_lesion_file", "strip_extension", "load_image
 #: File name endings treated as lesion files (folder listings, file stems).
 LESION_EXTENSIONS = (".nii.gz", ".nii", ".mgz", ".mgh", ".nrrd", ".nhdr", ".dcm")
 
+GZIP_MAGIC = bytes([0x1F, 0x8B])
 _LPS_TO_RAS = np.diag([-1.0, -1.0, 1.0, 1.0])
 
 
@@ -53,7 +54,31 @@ def load_image(path: str):
         return read_nrrd(path)
     if low.endswith(".dcm"):
         return read_dicom_seg(path)
-    return nib.load(path)
+    try:
+        return nib.load(path)
+    except Exception:
+        img = _load_by_content(path)
+        if img is None:
+            raise
+        return img
+
+
+def _load_by_content(path: str):
+    """A NIfTI/MGH file whose name doesn't match its compression: gzip data
+    named ``.nii`` (common after renaming), or plain data named ``.nii.gz``.
+    Decided by the file's first bytes; ``None`` if that doesn't help."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    if raw[:2] == GZIP_MAGIC:
+        raw = gzip.decompress(raw)
+    for cls in (nib.Nifti1Image, nib.Nifti2Image, nib.MGHImage):
+        try:
+            img = cls.from_bytes(raw)
+            img.get_data_dtype()
+            return img
+        except Exception:
+            continue
+    return None
 
 
 # --------------------------------------------------------------------------- #

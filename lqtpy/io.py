@@ -99,6 +99,14 @@ def as_lesion_image(src) -> nib.Nifti1Image:
     return img
 
 
+def load_image(path):
+    """Load any supported lesion file (NIfTI, MGZ, NRRD, DICOM-SEG) as a
+    nibabel image, reading a file whose name doesn't match its compression
+    (gzip data named ``.nii``) by its content. See :mod:`lqtpy.formats`."""
+    from .formats import load_image as _load
+    return _load(os.fspath(path))
+
+
 def load_lesion(src, threshold: float = 0.5):
     """Load/coerce a lesion source and return ``(img, was_binary)``.
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import datetime
 
 from .. import _format as fmt
-from ._standalone import _esc, _page
+from ._standalone import _esc, _flag_label, _flag_where, _page
 
 __all__ = ["render_qc_folder"]
 
@@ -24,7 +24,7 @@ def render_qc_folder(rows: "list[dict]", folder: str, cleaned: "list[dict] | Non
     kpis = [("Masks", str(n), "lesion files checked"),
             ("OK", str(counts["ok"] + counts["info"]), "no problems"),
             ("Check", str(counts["warn"]), "worth a look"),
-            ("Problem", str(counts["error"]), "unreadable, wrong space or flipped")]
+            ("Problem", str(counts["error"]), "major problems, wrong space or unreadable")]
     kpi_html = "".join(f'<div class="kpi"><div class="k">{_esc(k)}</div><div class="v">{_esc(v)}</div>'
                        f'<div class="s">{_esc(s)}</div></div>' for k, v, s in kpis)
     flag_rows = "".join(f'<tr><td>{_esc(k.replace("_", " "))}</td><td class="n">{v}</td></tr>'
@@ -34,7 +34,10 @@ def render_qc_folder(rows: "list[dict]", folder: str, cleaned: "list[dict] | Non
                     if any(fmt.quality_label(r["worst"]) == q for r in rows))
     body = []
     for r in rows:
-        msgs = "<br>".join(_esc(f["message"]) for f in r["flags"] if f["severity"] != "info")
+        msgs = "<br>".join(
+            f'<b>{_esc(_flag_label(f))}:</b> {_esc(f["message"])}'
+            + (f' <span class="muted">({_esc(_flag_where(f))})</span>' if _flag_where(f) else "")
+            for f in r["flags"] if f["severity"] != "info")
         if r["error"]:
             msgs = _esc(r["error"])
         c = done.get(r["file"])
@@ -44,10 +47,14 @@ def render_qc_folder(rows: "list[dict]", folder: str, cleaned: "list[dict] | Non
                     f'<td>{_esc(r["name"])}</td><td class="n" data-sort="{r["volume_mm3"] or 0}">{vol}</td>'
                     f'<td data-sort="{ {"ok": 0, "info": 0, "warn": 1, "error": 2}[r["worst"]]}">'
                     f'<span class="qc-badge {r["worst"]}">{fmt.quality_label(r["worst"])}</span></td>'
+                    f'<td data-sort="{r.get("score") if r.get("score") is not None else -1}">'
+                    f'{_esc(r.get("verdict") or "—")}'
+                    + (f' <span class="muted">{r["score"]}</span>' if r.get("score") is not None else "")
+                    + '</td>'
                     f'<td>{msgs or "<span class=muted>—</span>"}</td>{cl}</tr>')
     clh = "<th>Cleaned copy</th>" if cleaned is not None else ""
     table = (f'<div class="tablewrap{" scroll" if n > 12 else ""}"><table data-table="qcfolder"><thead><tr>'
-             f'<th>Mask</th><th class="n">cm³</th><th>Quality</th><th>Flags</th>{clh}</tr></thead>'
+             f'<th>Mask</th><th class="n">cm³</th><th>Quality</th><th>Verdict · score</th><th>Flags</th>{clh}</tr></thead>'
              f'<tbody>{"".join(body)}</tbody></table></div>')
     dash = (f'<div class="dash"><div class="hero"><div><h1>Mask quality</h1><div class="meta">{_esc(folder)} · '
             f'{_esc(ts)}</div></div></div><div class="kpis">{kpi_html}</div>'

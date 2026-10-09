@@ -83,8 +83,16 @@ def test_specks_are_info_for_a_couple_of_stray_marks():
 
 
 def test_chunk_outside_brain_is_flagged():
-    m = S.sphere(C, 12) | S.sphere([0, -100, -65], 8)
+    m = S.sphere(C, 12) | S.sphere([0, -100, -55], 8)
     assert "outside_brain" in _ids(m)
+
+
+def test_chunk_on_the_image_edge_is_reported_once():
+    """A chunk touching the image border is an edge artefact; it isn't also
+    counted as lesion outside the brain."""
+    m = S.sphere(C, 12) | S.sphere([0, -100, -65], 8)
+    ids = _ids(m)
+    assert "edge_artifact" in ids and "outside_brain" not in ids
 
 
 def test_not_in_mni_space():
@@ -172,3 +180,52 @@ def test_header_disagreement_is_info_when_sform_is_right():
     im.set_sform(S.MNI_AFFINE, code=2)
     h = [f for f in qc.check(im) if f.id == "header"]
     assert h and h[0].severity == "info"
+
+
+# ---------------------------------------------------------------- strokes / slab
+def _crosshair_drawing():
+    """A lesion drawn on one coronal slab, joined to a thin sagittal sheet and a
+    thin axial sheet (strokes on the wrong planes), like a real mask that
+    passed every check before 0.5.1."""
+    w = S.mni_world()
+    x, y, z = w[..., 0], w[..., 1], w[..., 2]
+    disc = (np.abs(y + 51) <= 3.5) & (((x + 12) / 26) ** 2 + ((z - 5) / 30) ** 2 <= 1)
+    sagittal = (np.abs(x + 10) <= 0.5) & (y >= -75) & (y <= -30) & (z >= -30) & (z <= 35)
+    axial = (np.abs(z - 2) <= 0.5) & (y >= -60) & (y <= -40) & (x >= -35) & (x <= 15)
+    return disc | sagittal | axial
+
+
+def test_strokes_and_slab_found():
+    from lqtpy.qc import check, clean
+    m = _crosshair_drawing()
+    flags = {f.id: f for f in check(S.img(m))}
+    assert "strokes" in flags and "flat" in flags
+    assert "coronal" in flags["flat"].message and "front to back" in flags["flat"].message
+    img, rep = clean(S.img(m), strokes=True)
+    assert rep["removed_strokes"] >= 1
+    # what's left is still a single-slab drawing
+    assert "flat" in {f.id for f in check(img)}
+
+
+def test_no_strokes_or_slab_on_normal_lesions():
+    from lqtpy.qc import check
+    for m in (S.sphere((-40, 10, 10), 10), S.blobs([((-40, 10, 10), 14), ((-35, -10, 15), 10)]),
+              S.native_drawing((-40, 10, 10), (12, 10, 9)),
+              S.ellipsoid((-30, -20, 20), (4, 18, 12))):   # thin but real (8 mm)
+        ids = {f.id for f in check(S.img(m))}
+        assert "strokes" not in ids, ids
+
+
+def test_jagged_slice_by_slice_drawing_is_not_strokes():
+    """A lesion drawn axial slice by axial slice with outlines that jump
+    between slices leaves wide one-voxel rims in the drawing plane; those
+    are ordinary drawing, not strokes."""
+    from lqtpy.qc import check
+    rng = np.random.default_rng(3)
+    w = S.mni_world()
+    m = np.zeros(S.MNI_SHAPE, bool)
+    for z in range(0, 30):
+        rx, ry = rng.uniform(8, 22), rng.uniform(8, 22)
+        zz = w[..., 2] == z
+        m |= zz & (((w[..., 0] + 40) / rx) ** 2 + ((w[..., 1] - 5) / ry) ** 2 <= 1)
+    assert "strokes" not in {f.id for f in check(S.img(m))}

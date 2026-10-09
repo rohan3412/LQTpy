@@ -1,5 +1,119 @@
 # Changelog
 
+## 0.6.0 (2026-09-30)
+
+Graded, location-aware mask quality checks, built so that drawing tools (MRLatte) and
+registries (the Lesion Registry) can use them directly. Full reference:
+[docs/QC.md](docs/QC.md).
+
+### Graded findings
+- Every finding keeps its word (Note / Check / Problem) and now adds:
+  - a **grade** from its extent: minor, moderate or major ("Check, moderate: 14% of the lesion
+    lies outside the brain");
+  - `category`;
+  - `extent` (named measurements with units);
+  - `affected_pct`;
+  - **`locations`**: slices or points on the mask's grid and in mm, so viewers can jump there;
+  - a machine-readable **`fix`** hint.
+- `Flag` is now `qc.Finding`. The old fields are unchanged, so existing callers keep working.
+- `qc.assess()` returns a `QCResult`, with a **verdict** (usable / usable with caution / fix
+  before use / unusable), a **score** from 0 to 100 and a versioned JSON form (`to_json()`,
+  schema `lqtpy.qc`). The version is `qc.QC_VERSION` ("1.0"), separate from the package
+  version: key caches on it.
+- **Drawing context** (`context=`: drawn slices, interpolated slices, drawing plane, base,
+  expected side) gives exact gap slices and protects the drawing plane from `strokes`.
+  `labels_are_colours: True` tells lqtpy the label values are pen colours, not a finding.
+- **For tools that show findings:** `QCResult.needs_attention` (any Check or Problem; Notes
+  alone never), and `label` ("Check, moderate") and `where` ("axial slice 107") in every
+  finding's `to_dict()`.
+- **Tiers**:
+  - `header` (no voxel read; recognises the 0.74 mm 207×256×215 and 2 mm 99×117×95 grids);
+  - `fast` (about 90 ms on a 0.74 mm drawing);
+  - `full` (about 220 ms).
+
+### Detection
+- **New checks**:
+  - `holes` (cavities and porous "swiss cheese"; CSF and ventricle cavities excluded);
+  - `box` (rectangle-tool blocks);
+  - `values` (several label values; probability maps whose volume depends on the threshold);
+  - `inverted` (replaces the "not MNI" it used to be misreported as);
+  - `misregistered` (a lesion shifted out of the brain, split from `outside_brain`);
+  - `fragmentation`;
+  - `plausibility` (tiny, huge, only CSF, a mirror copy).
+- **Better detection**:
+  - `sparse_slices` catches drawing on every 4th slice, wide gaps between thin slabs and a
+    single forgotten slice, and no longer fires on jagged but complete drawings;
+  - `flat` catches a single 5 mm slice warped to MNI (an outline-consistency test);
+  - `hollow` recognises warped outlines;
+  - `outside_brain` is graded from 1% of the lesion upwards, and a rim within 5 mm of the brain
+    is a Note.
+- **Rules tuned on real masks** (200 labelled masks, see "Labelled review" in docs/QC.md):
+  - the space between two separate lesions (one in each hemisphere) is no longer a gap, and
+    neither is the neck where two blobs join;
+  - nearly empty slices count as gaps, and three or more separate thin sheets in one plane
+    are reported as `sparse_slices`, not `flat`;
+  - `flat` catches a wide plate up to 12 mm thick that ends in two flat faces; small thin
+    parts under 12 mm across are left alone;
+  - `strokes` also finds the strips where a stroke crosses or leaves a lesion, and strokes no
+    longer hide by outvoting a clear slice-by-slice drawing when the drawing plane is inferred;
+  - image-edge fragments are no longer also reported as `outside_brain`;
+  - the mirror-copy check needs 92% overlap (was 70%): bilateral lesions are not copies.
+- On the synthetic library (`tests/qc_zoo.py`), against the 0.5.1 checks:
+  - problem cases detected: from 30 of 56 to all 56;
+  - problem cases graded correctly: from 2 of 56 to all 56;
+  - false alarms on the 13 clean cases: none;
+  - locations: every one within 15 mm of the true problem.
+
+### Helpers for other tools
+- `qc.problem_mask(lesion, finding)` returns the affected voxels; `qc.PROBLEM_KIND` says
+  whether to remove, add or inspect them.
+- `qc.fix(lesion, ids)` returns a fixed copy plus `added`/`removed` masks, and never writes.
+- `qc.assess_folder` returns JSON with a summary.
+- `qc.rank(copies)` puts copies of one lesion in order, best first.
+- `qc.clean(outside=True)`.
+- `qc.check_folder` rows gain `verdict` and `score`.
+- `lqtpy.io.load_image(path)`.
+- `datasets.discon_index_target_path()`.
+- `analyze_single` returns `thumb_uri` with plots, and `qc_verdict` / `qc_score` /
+  `qc_version`.
+- `lqtpy qc` gains `--json [FILE]`, `--tier`, `--context` and `--jobs`. It prints each finding's
+  grade and first location, and the verdict and score.
+
+### Reports
+- The Quality card shows the verdict, the score, each finding's grade and where the problem
+  is. The folder QC page adds a verdict and score column.
+
+### Testing tools
+- `tests/qc_zoo.py`: a synthetic error library. `tools/qc_zoo_report.py` prints its detection,
+  grade and location tables.
+- `tools/qc_survey.py` surveys a real database (hashed ids only), compared with a baseline.
+- `tools/qc_review.py` builds a blind labelling page of 200 stratified masks (`pack` makes a
+  single-file phone version) and scores lqtpy against the labels (precision, recall, grade
+  agreement on tuning and validation halves). `tools/qc_impact.py` checks that grades track
+  how much fixing a finding changes the results.
+- `tools/bench.py` times the QC tiers.
+- Contract tests pin down exactly how MRLatte and the Lesion Registry call lqtpy.
+
+## 0.5.1 (2026-09-30)
+
+### Fixed
+- **A badly drawn mask passed every check**: a lesion drawn on one coronal slab, joined to
+  thin sheets drawn on the sagittal and axial planes, was one connected piece, so the
+  per-piece `flat` test saw it as thick. Two new checks catch it:
+  - `strokes`: solid flat sheets exactly one voxel thick in a single slice (at least 200 mm²
+    and 6 mm wide), lying outside the plane the lesion was drawn in: strokes on the wrong
+    plane. Rims left by ordinary slice-by-slice drawing (in the drawing plane, and narrow) and
+    sparse or single-slice drawings (already their own flags) don't count.
+    `qc.clean(lesion, strokes=True)` / `lqtpy clean --strokes` removes the strokes into a new
+    mask. On the 1,335-mask clinical database it flags 23 masks (1.7%); the ones reviewed were
+    all malformed drawings (boxy multi-plane slabs, bars outside the brain).
+  - `flat` now also fires when most of the lesion (70%+) lies in one thin slab although the
+    mask reaches much further, and names the direction ("87% of the lesion lies in one
+    coronal slab 7.4 mm thick, although the mask reaches 52 mm from front to back").
+- `qc.check` crashed on a mask made only of specks (introduced with the slab test).
+- A NIfTI file whose name doesn't match its compression (gzip data named `.nii`, or plain
+  data named `.nii.gz`) failed to load from its path; it is now read by its content.
+
 ## 0.5.0 (2026-09-29)
 
 Implements Phases 0–7 of [docs/ROADMAP.md](docs/ROADMAP.md), then the design and consistency

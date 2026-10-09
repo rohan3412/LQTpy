@@ -152,6 +152,7 @@ tr.hl td { background:color-mix(in srgb, var(--hl) 14%, transparent); }
 .flag.error { background:var(--err-bg); } .flag.error .ic { background:var(--err); color:#fff; }
 .flag b { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
 .flag .sug { color:var(--ink-3); font-size:12.5px; }
+.flags .verdict { margin:0 0 2px; font-size:14px; }
 .status { display:inline-flex; align-items:center; gap:6px; font-weight:650; }
 .status .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); }
 .status.warn .dot { background:var(--warn); } .status.error .dot { background:var(--err); }

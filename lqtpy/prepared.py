@@ -99,6 +99,9 @@ class PreparedLesion:
         self._lock = threading.RLock()
         #: qform/sform facts about the original header (see _header_info).
         self.header_info: dict = {}
+        #: the input's values before thresholding: dtype, distinct values,
+        #: integer or not, and (for fractional data) counts above 0.3/0.5/0.7.
+        self.value_info: dict = {}
 
     def __repr__(self) -> str:
         return (f"PreparedLesion(name={self.name!r}, n_voxels={self.n_voxels}, "
@@ -256,11 +259,23 @@ def prepare(lesion, threshold: float = 0.5, *, name: "str | None" = None) -> Pre
         if n_nonfinite:
             data = np.where(finite, data, 0)
     mask = data > threshold
+    value_info = {"dtype": str(data.dtype)}
     if data.dtype.kind == "b":
         was_binary = True
+        value_info["values"] = [1]
     else:
         n_nonzero = np.count_nonzero(data)
         was_binary = bool(n_nonzero == np.count_nonzero(data == 1))
+        if not was_binary and n_nonzero:
+            nzv = data[data != 0]
+            uniq = np.unique(nzv[:2_000_000])
+            integer = bool(np.all(np.mod(uniq[:64], 1) == 0))
+            value_info.update(values=[float(v) for v in uniq[:16]], n_values=int(min(len(uniq), 10 ** 6)),
+                              integer=integer, max=float(nzv.max()), min=float(nzv.min()))
+            if not integer:
+                # Volume if the threshold were 0.3 or 0.7 instead: how much the
+                # result depends on it.
+                value_info["n_above"] = {str(t): int(np.count_nonzero(nzv > t)) for t in (0.3, 0.5, 0.7)}
     label = name or _stem(lesion)
     if not mask.any():
         where = os.fspath(lesion) if isinstance(lesion, (str, os.PathLike)) else "<in-memory lesion>"
@@ -277,6 +292,7 @@ def prepare(lesion, threshold: float = 0.5, *, name: "str | None" = None) -> Pre
                               was_binary=was_binary, n_nonfinite=n_nonfinite,
                               name=label, source=lesion)
     prepared.header_info = _header_info(img)
+    prepared.value_info = value_info
     return prepared
 
 

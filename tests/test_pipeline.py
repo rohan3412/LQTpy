@@ -115,8 +115,11 @@ def test_cli_version(capsys):
 
 
 def test_cli_qc_and_repair(gapped_file, tmp_path, capsys):
-    assert main(["qc", gapped_file]) == 0
-    assert "some axial slices only" in capsys.readouterr().out
+    # Half the lesion's slices are missing: a major finding, so "Problem"
+    # and exit code 1.
+    assert main(["qc", gapped_file]) == 1
+    out = capsys.readouterr().out
+    assert "some axial slices only" in out and "Problem" in out
     out = str(tmp_path / "fixed.nii.gz")
     assert main(["repair", gapped_file, "-o", out]) == 0
     assert os.path.exists(out)

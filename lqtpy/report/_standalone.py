@@ -161,15 +161,38 @@ def _qc_worst(flags) -> str:
     return "error" if "error" in sev else "warn" if "warn" in sev else "ok"
 
 
-def _flags_html(flags) -> str:
-    items = [f for f in flags or [] if f["severity"] != "info"] + \
-            [f for f in flags or [] if f["severity"] == "info"]
+def _flag_label(f) -> str:
+    """'Check, moderate' / 'Problem, major' / 'Note'."""
+    word = fmt.quality_label(f["severity"])
+    return f'{word}, {f["grade"]}' if f.get("grade") else word
+
+
+def _flag_where(f) -> str:
+    """The first problem location in words ('coronal slice 81', 'at -40, 10, 5 mm')."""
+    locs = f.get("locations") or []
+    if not locs:
+        return ""
+    loc = locs[0]
+    if loc.get("kind") == "slice":
+        return f'{loc["plane"]} slice {loc["index"]}'
+    return "at " + ", ".join(f"{v:.0f}" for v in loc["mm"]) + " mm"
+
+
+def _flags_html(flags, verdict=None, score=None) -> str:
+    order = {"error": 0, "warn": 1, "info": 2}
+    items = sorted(flags or [], key=lambda f: order[f["severity"]])
     out = []
+    if verdict and any(f["severity"] != "info" for f in items):
+        out.append(f'<p class="verdict"><b>{_esc(verdict.capitalize())}</b>'
+                   + (f' <span class="muted">· quality score {score}/100</span>' if score is not None else "")
+                   + "</p>")
     for f in items:
         icon = {"error": "×", "warn": "!", "info": "i"}[f["severity"]]
-        sug = f'<div class="sug">{_esc(f["suggestion"])}</div>' if f.get("suggestion") else ""
+        where = _flag_where(f)
+        sug = " · ".join(_esc(x) for x in (f"Where: {where}" if where else "", f.get("suggestion") or "") if x)
+        sug = f'<div class="sug">{sug}</div>' if sug else ""
         out.append(f'<div class="flag {f["severity"]}"><span class="ic" aria-hidden="true">{icon}</span>'
-                   f'<div><b>{fmt.quality_label(f["severity"])}</b>{_esc(f["message"])}{sug}</div></div>')
+                   f'<div><b>{_esc(_flag_label(f))}</b>{_esc(f["message"])}{sug}</div></div>')
     return f'<div class="flags">{"".join(out)}</div>'
 
 
@@ -560,6 +583,8 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
             f'<span class="r" style="width:{m["pct_right"]}%"></span></div>')
     n_flags = f"{n_warn} flag" + ("s" if n_warn != 1 else "")
     qc_sub = "mask quality checks" if worst == "ok" else f"{n_flags} · mask quality"
+    if res.get("qc_verdict") and worst != "ok":
+        qc_sub = f'{res["qc_verdict"]} · {n_flags}'
     t0 = terrs[0] if terrs else None
     terr_sub = (f'{t0["pct_of_lesion"]:.0f}% of the lesion' if t0 else "no territory data") + (
         " · border zone" if bz.get("fits") else "")
@@ -599,7 +624,7 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
            f'{desc or "<p>No description.</p>"}<div id="desc-plain" hidden>{_esc(plain)}</div></section>')
     top += (f'<section class="card" aria-label="Figures"><h2>Lesion</h2><div class="figs">'
             f'{"".join(figs) or "<p class=note>No figures (plots were off).</p>"}</div></section></div>')
-    quality = (f'<section class="card" aria-label="Quality"><h2>Quality</h2>{_flags_html(flags)}</section>'
+    quality = (f'<section class="card" aria-label="Quality"><h2>Quality</h2>{_flags_html(flags, res.get("qc_verdict"), res.get("qc_score"))}</section>'
                if flags else "")
 
     comp = "".join(_row(n, v, "") for n, v in _composition(facts)[:9])
@@ -687,9 +712,14 @@ def _clinical_single(res, manifest, m, facts, flags, ts, name, src) -> str:
         out.append("<p>No description was generated.</p>")
     out.append(h2("Mask quality"))
     warn = [f for f in flags if f["severity"] != "info"]
+    if warn and res.get("qc_verdict"):
+        out.append(f'<p class="fine">Verdict: {_esc(res["qc_verdict"])} '
+                   f'(quality score {res.get("qc_score")}/100).</p>')
     if warn:
-        out += [f'<p class="flagline {f["severity"]}"><strong>{fmt.quality_label(f["severity"])}:</strong> '
-                f'{_esc(f["message"])}</p>' for f in warn]
+        out += [f'<p class="flagline {f["severity"]}"><strong>{_esc(_flag_label(f))}:</strong> '
+                f'{_esc(f["message"])}'
+                + (f' <span class="fine">({_esc(_flag_where(f))})</span>' if _flag_where(f) else "")
+                + '</p>' for f in warn]
     else:
         out.append('<p class="ok"><strong>OK:</strong> no quality problems found.</p>')
     notes = [f for f in flags if f["severity"] == "info"]

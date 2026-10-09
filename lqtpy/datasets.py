@@ -89,6 +89,13 @@ def get_data_home() -> str:
     return os.path.join(base, "lqtpy")
 
 
+def discon_index_target_path() -> str:
+    """Where the disconnection index is looked for (and where
+    ``tools/build_discon_index.py`` should write it), whether or not it
+    exists yet."""
+    return os.path.join(get_data_home(), _INDEX_FILENAME)
+
+
 def get_discon_index_path() -> str:
     """Path to the built disconnection index, if it exists.
 
@@ -281,7 +288,7 @@ def load_suit():
 
 
 __all__ = [
-    "fetch_suit", "load_suit", "suit_available", "SUIT_BASE_URL",
+    "fetch_suit", "load_suit", "suit_available", "SUIT_BASE_URL", "discon_index_target_path",
     "get_data_home", "get_discon_index_path", "discon_index_available",
     "preload_discon_index", "discon_index_cache_clear", "fetch",
     "get_tract_display_names", "FORMAT_VERSION",

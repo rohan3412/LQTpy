@@ -77,7 +77,11 @@ def to_pdf(source, pdf_path=None, *, browser: "str | None" = None, timeout: floa
     exe = browser or find_browser()
     try:
         if exe:
-            with tempfile.TemporaryDirectory(prefix="lqtpy-browser-") as profile:
+            # Not TemporaryDirectory: Edge on Windows can still hold files in
+            # its profile when it returns, and a failed cleanup must not fail
+            # the export.
+            profile = tempfile.mkdtemp(prefix="lqtpy-browser-")
+            try:
                 cmd = [exe, "--headless=new", "--disable-gpu", "--no-first-run",
                        "--no-default-browser-check", f"--user-data-dir={profile}",
                        "--no-pdf-header-footer", "--print-to-pdf-no-header",
@@ -98,6 +102,8 @@ def to_pdf(source, pdf_path=None, *, browser: "str | None" = None, timeout: floa
                         break
                     last = size
                     time.sleep(0.5)
+            finally:
+                shutil.rmtree(profile, ignore_errors=True)
             if pdf.exists() and pdf.stat().st_size > 0:
                 return str(pdf)
         try:

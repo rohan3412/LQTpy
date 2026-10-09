@@ -66,9 +66,12 @@ each atlas grid with nearest-neighbour interpolation.
 |---|---|
 | `prepare(lesion)` | a `PreparedLesion`: loaded once, cached resampling per atlas grid |
 | `describe(lesion, profile=...)` | a plain-language `Description` (`.text`, `.sections`, `.facts`) |
-| `qc.check(lesion)` | quality flags (see below) |
+| `qc.check(lesion)` | quality findings (see below) |
+| `qc.assess(lesion)` | the graded result: findings, verdict, score, JSON ([docs/QC.md](docs/QC.md)) |
 | `qc.repair_gaps(lesion)` / `qc.clean(lesion)` | a **new** repaired / cleaned mask (opt-in) |
 | `qc.check_folder(folder)` / `qc.clean_folder(src, dst)` | the same for a folder; cleaning writes copies |
+| `qc.fix(lesion, ids)` / `qc.problem_mask(lesion, finding)` | a fixed copy plus the changed voxels / the affected voxels |
+| `qc.rank(copies)` / `qc.assess_folder(folder)` | copies of one lesion best first / a folder as JSON with a summary |
 | `tissue.locate(lesion)` | tissue composition, and a location class for each separate part |
 | `watershed.border_zones(lesion)` | share in the ACA-MCA, MCA-PCA, ACA-PCA and internal border zones |
 | `structures.distances(lesion)` | shortest distance (mm) to key tracts and cortical areas |
@@ -161,10 +164,26 @@ millimetre).
 
 `qc.check()` flags masks that would give misleading numbers, tuned for MNI-space masks where a
 warp has smeared the artefacts: drawn on some slices only (`sparse_slices`), a single slice
-(`flat`), an unfilled outline (`hollow`), fragments on the image edge (`edge_artifact`), stray
-specks, volume outside the brain, a mask not in MNI space, header problems, and a left/right
-mismatch when the expected side is known. Nothing is changed unless you ask. Checked on 1,231
-real clinical masks.
+(`flat`, including a lesion that is mostly one thin slab with other pieces attached), an
+unfilled outline (`hollow`), lines or sheets drawn by mistake (`strokes`), fragments on the
+image edge (`edge_artifact`), stray specks, volume outside the brain, a mask not in MNI space, header problems, and a left/right
+mismatch when the expected side is known. It also finds holes, rectangle-tool blocks,
+odd label values and probability maps, inverted masks, masks shifted out of the brain, masks
+shattered into many parts, and implausible lesions (tiny, huge, only CSF, a mirror copy).
+Nothing is changed unless you ask.
+
+Each finding is **graded by its extent**. It says how much ("Check, moderate: 14% of the lesion
+lies outside the brain") and **where** (a slice or a point, so a viewer can jump there). It
+also carries a fix hint. The mask gets a **verdict** (usable / usable with caution / fix before
+use / unusable) and a **score** for ranking copies. Other points:
+
+- Three tiers (`header`, `fast`, `full`).
+- An optional **drawing context** from a drawing tool (the slices actually drawn, the drawing
+  plane), which gives exact gap slices.
+- A versioned JSON schema: key caches on `qc.QC_VERSION`.
+
+Tested on a synthetic library of every problem type at several extents, and on 1,335 real
+clinical masks. The full reference is [docs/QC.md](docs/QC.md).
 
 **Native space**: gaps are clearest on the scan the mask was drawn on. Pass the native mask as
 well (`analyze_single(mni_mask, native=native_mask)`) and the drawing checks run there; or
@@ -240,7 +259,8 @@ Every report embeds a run record: versions, settings and each input's SHA-256.
 lqtpy single lesion.nii.gz -o out              # full report
 lqtpy group lesions/ -o out -m subjects.csv --compare aphasia -j 4
 lqtpy describe lesion.nii.gz --profile stroke
-lqtpy qc lesion.nii.gz                         # flags for one mask
+lqtpy qc lesion.nii.gz                         # graded findings for one mask
+lqtpy qc lesion.nii.gz --json                  # the same as JSON (--tier fast, --context ctx.json)
 lqtpy qc lesions/ --clean-to cleaned/          # one page for a folder; cleaned copies
 lqtpy repair lesion.nii.gz -o repaired.nii.gz  # interpolate gap-drawn masks (new file)
 lqtpy warp native.nii.gz --transform T.txt -o mni.nii.gz

@@ -33,6 +33,19 @@ def lesion(center=(-40, 10, 5), r=15.0):
     return nib.Nifti1Image(m.astype(np.uint8), AFF)
 
 
+def drawing():
+    """A lesion drawn on every other slice of the 0.74 mm template grid
+    (207 x 256 x 215), as a drawing tool saves it (label value 1)."""
+    shape = (207, 256, 215)
+    aff = np.diag([0.74, 0.74, 0.74, 1.0])
+    aff[:3, 3] = (-76.5, -113, -78)
+    ijk = np.indices(shape).reshape(3, -1).T.astype(float)
+    xyz = ijk * 0.74 + aff[:3, 3]
+    m = (np.linalg.norm((xyz - (-40, 10, 5)) / (18, 14, 12), axis=1) <= 1).reshape(shape)
+    m[:, :, 1::2] = False
+    return nib.Nifti1Image(m.astype(np.uint8), aff)
+
+
 def med(fn, n=7):
     ts = []
     for _ in range(n):
@@ -48,6 +61,7 @@ def main():
     qc.brain_mask()
     print(f"preload (atlases, tract index, brain mask, tissue maps): {1000 * (time.perf_counter() - t):.0f} ms\n")
     L = lesion()
+    D = drawing()
     rows = [
         ("prepare", lambda: lqtpy.prepare(L)),
         ("lesion_stats", lambda: api.lesion_stats(L)),
@@ -57,6 +71,11 @@ def main():
         ("lobe_overlap aal", lambda: api.lobe_overlap(L, "aal")),
         ("tract_proxy_overlap", lambda: api.tract_proxy_overlap(L)),
         ("qc.check", lambda: qc.check(L)),
+        ("qc.assess tier=header", lambda: qc.assess(L, tier="header")),
+        ("qc.assess tier=fast", lambda: qc.assess(L, tier="fast")),
+        ("qc.assess tier=full", lambda: qc.assess(L, tier="full")),
+        ("qc.assess fast, 0.74 mm drawing", lambda: qc.assess(D, tier="fast")),
+        ("qc.assess full, 0.74 mm drawing", lambda: qc.assess(D, tier="full")),
         ("tissue.locate", lambda: lqtpy.tissue.locate(L)),
         ("watershed.border_zones", lambda: lqtpy.watershed.border_zones(L)),
         ("structures.distances", lambda: lqtpy.structures.distances(L)),

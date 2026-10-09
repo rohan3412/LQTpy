@@ -310,6 +310,8 @@ def _analyse(p, atlases, *, kind, tracts, plots, qc, describe, profile, extras,
             man.add("qc", "Mask quality checks", RAN)
     else:
         man.add("qc", "Mask quality checks", SKIPPED, reason="turned off (qc=False)")
+    from .qc_model import QC_VERSION, verdict_and_score
+    qc_verdict, qc_score, _ = verdict_and_score(flags) if qc else (None, None, None)
 
     from . import tissue as _tissue
     loc = _tissue.locate(p)
@@ -418,6 +420,9 @@ def _analyse(p, atlases, *, kind, tracts, plots, qc, describe, profile, extras,
         "was_binary": p.was_binary,
         "morphometry": morph,
         "qc": [f.to_dict() for f in flags],
+        "qc_verdict": qc_verdict,
+        "qc_score": qc_score,
+        "qc_version": QC_VERSION if qc else None,
         "tissue": tissue_res,
         "border_zones": bz,
         "key_structures": key_structs,
@@ -565,7 +570,7 @@ def analyze_single(lesion=None, atlases=None, out_dir=None, *legacy, lesion_path
     result = _analyse(p, atlases, kind="single", tracts=tracts, plots=plots, qc=qc,
                       describe=describe, profile=profile, extras=extras,
                       disconnection=disconnection, expected_side=expected_side,
-                      threshold=threshold, native=native, viewer=viewer,
+                      threshold=threshold, native=native, viewer=viewer, thumbnail=plots,
                       anonymous=anon is not None)
     result["elapsed"] = _fmt_elapsed(time.time() - t0)
     from .repro import run_record
@@ -718,6 +723,7 @@ def _subject_job(job: dict) -> dict:
                                 if terrs else None),
                   "border_zone": bool((res.get("border_zones") or {}).get("fits")),
                   "qc": res["qc"], "qc_worst": _worst(res["qc"]),
+                  "qc_verdict": res.get("qc_verdict"), "qc_score": res.get("qc_score"),
                   "summary": summary_para, "summary_marked": marked or summary_para,
                   "report_path": report_path,
                   "pdf_path": res.get("pdf_path"),

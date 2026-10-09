@@ -131,11 +131,23 @@ def build_parser(cfg: "dict | None" = None) -> argparse.ArgumentParser:
     q.add_argument("--recursive", "-r", action="store_true", help="Folder: include subfolders.")
     q.add_argument("--clean-to", metavar="NEW_FOLDER",
                    help="Folder: write cleaned copies of flagged masks here (never overwrites).")
+    q.add_argument("--json", nargs="?", const="-", metavar="FILE",
+                   help="Print the graded result as JSON (or write it to FILE); for a folder, "
+                        "every mask plus a summary.")
+    q.add_argument("--tier", choices=("header", "fast", "full"), default="full",
+                   help="header: header only (no voxel read); fast: skip the slower checks; "
+                        "full (default): everything.")
+    q.add_argument("--context", metavar="JSON_FILE",
+                   help="Drawing context from a drawing tool (drawn slices, drawing plane, base).")
+    q.add_argument("--jobs", "-j", type=int, default=cfg.get("jobs", 1),
+                   help="Folder: worker processes.")
 
     c = sub.add_parser("clean", help="Remove image-edge artefacts and specks into a new mask (opt-in).")
     c.add_argument("lesion")
     c.add_argument("--out", "-o", required=True, help="Path for the cleaned .nii.gz")
     c.add_argument("--keep-specks", action="store_true", help="Only remove image-edge artefacts.")
+    c.add_argument("--strokes", action="store_true",
+                   help="Also remove thin strokes (lines or sheets drawn by mistake).")
     c.add_argument("--threshold", "-t", type=float, default=0.5)
 
     r = sub.add_parser("repair", help="Interpolate sparse-slice gaps into a new mask (opt-in).")
@@ -241,26 +253,48 @@ def _run(args, cfg) -> int:
         from . import qc
         if os.path.isdir(args.lesion):
             return _qc_folder(args)
-        flags = qc.check(args.lesion, threshold=args.threshold, expected_side=args.expected_side)
-        worst = "error" if any(f.severity == "error" for f in flags) else (
-            "warn" if any(f.severity == "warn" for f in flags) else "ok")
+        ctx = None
+        if args.context:
+            import json as _json
+            with open(args.context, encoding="utf-8") as fh:
+                ctx = _json.load(fh)
+        kw = {} if args.tier == "header" else dict(threshold=args.threshold,
+                                                    expected_side=args.expected_side, context=ctx)
+        res = qc.assess(args.lesion, tier=args.tier, **kw)
+        if args.json:
+            text = res.to_json(indent=1)
+            if args.json == "-":
+                print(text)
+            else:
+                with open(args.json, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            return 1 if res.worst == "error" else 0
         _term.header(f"quality of {os.path.basename(args.lesion)}")
-        _term.field("Quality", _term.quality(worst))
-        for f in flags:
-            _term.field(_term.quality(f.severity), f.message
+        _term.field("Quality", _term.quality(res.worst if res.worst != "ok" else "ok")
+                    + _term.paint(f" · {res.verdict} · score {res.score}", "dim"))
+        for f in res.findings:
+            label = _term.quality(f.severity) + (_term.paint(f", {f.grade}", "dim") if f.grade else "")
+            where = ""
+            if f.locations:
+                loc = f.locations[0]
+                where = (f" [{loc['plane']} slice {loc['index']}]" if loc["kind"] == "slice"
+                         else f" [at {', '.join(f'{v:.0f}' for v in loc['mm'])} mm]")
+            _term.field("", f"{label}  {f.message}{_term.paint(where, 'dim')}"
                         + (_term.paint(f"  -> {f.suggestion}", "dim") if f.suggestion else ""))
-        return 1 if worst == "error" else 0
+        return 1 if res.worst == "error" else 0
     if args.cmd == "clean":
         import nibabel as nib
         from . import qc
-        img, rep = qc.clean(args.lesion, specks=not args.keep_specks, threshold=args.threshold)
+        img, rep = qc.clean(args.lesion, specks=not args.keep_specks, strokes=args.strokes,
+                            threshold=args.threshold)
         if not rep["voxels_removed"]:
             print("Nothing to remove.")
             return 0
         _refuse_overwrite(args.lesion, args.out)
         nib.save(img, args.out)
-        print(f"Removed {rep['removed_edge_fragments']} edge fragment(s) and "
-              f"{rep['removed_specks']} speck(s), {rep['volume_removed_mm3']:.0f} mm³. "
+        print(f"Removed {rep['removed_edge_fragments']} edge fragment(s), "
+              f"{rep['removed_specks']} speck(s) and {rep.get('removed_strokes', 0)} stroke(s), "
+              f"{rep['volume_removed_mm3']:.0f} mm³. "
               f"Wrote {_term.path(args.out)}")
         return 0
     if args.cmd == "repair":
@@ -340,6 +374,18 @@ def _refuse_overwrite(src, out):
 def _qc_folder(args) -> int:
     from . import _term, qc
     from .report.qcpage import render_qc_folder
+    if args.json:
+        import json as _json
+        res = qc.assess_folder(args.lesion, tier=args.tier, recursive=args.recursive,
+                               jobs=args.jobs, **({} if args.tier == "header" else
+                                                  {"threshold": args.threshold}))
+        text = _json.dumps(res, indent=1, default=str)
+        if args.json == "-":
+            print(text)
+        else:
+            with open(args.json, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        return 1 if res["summary"]["verdicts"].get("unusable") else 0
     rows = qc.check_folder(args.lesion, threshold=args.threshold, recursive=args.recursive)
     cleaned = None
     if args.clean_to:
