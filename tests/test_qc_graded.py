@@ -397,3 +397,55 @@ def test_pen_colours_are_not_a_finding_when_the_tool_says_so():
     assert r.context == {"labels_are_colours": True}
     # anything but True is ignored, like other bad context values
     assert any(f.id == "values" for f in qc.check(img, context={"labels_are_colours": "yes"}))
+
+
+# ---------------------------------------------------------------- 0.6.1
+def test_two_forgotten_slices_in_a_large_round_lesion_are_a_gap():
+    """From a real mask (lqtpy_gap_detection_test_case.nii): two empty axial
+    slices through a large lesion. The pieces either side are round, which
+    used to mean "two separate lesions"; a short, clear gap overrides that,
+    and only the two slices are filled."""
+    m = S.ellipsoid((-40, -60, 20), (28, 40, 32))
+    z = S.mni_world()[..., 2]
+    m &= ~((z >= 32) & (z < 34))                                     # two 1 mm slices
+    f = next(f for f in qc.check(S.img(m)) if f.id == "sparse_slices")
+    assert f.severity == "warn" and f.grade == "minor" and f.extent["missing_pct"] < 5
+    assert f.fix["kwargs"]["slices"] == f.evidence["gap_slices"]
+    new, rep = qc.fix(S.img(m), ["sparse_slices"])
+    assert 0 < rep["voxels_added"] <= 2 * int(m.sum(axis=(0, 1)).max())
+    # two separate round lesions with the same space between them are not a gap
+    far = S.ellipsoid((-40, -60, 0), (20, 25, 12)) | S.ellipsoid((-40, -60, 30), (20, 25, 12))
+    assert "sparse_slices" not in {f.id for f in qc.check(S.img(far)) if f.severity != "info"}
+
+
+def test_a_speck_far_outside_the_brain_is_a_check():
+    base = S.sphere((-40, 10, 10), 10)
+    near = base | S.sphere((-40, 10, 10), 1)                        # inside: nothing
+    assert not [f for f in qc.check(S.img(near)) if f.id == "outside_brain"]
+    far = base | S.sphere((-40, 10, 95), 1)                          # ~20 mm above the brain
+    f = next(f for f in qc.check(S.img(far)) if f.id == "outside_brain")
+    assert f.severity == "warn" and f.grade == "minor" and f.extent["far_mm3"] > 0
+    assert "far outside the brain" in f.message
+
+
+def test_outline_sensitivity_extra():
+    from lqtpy import registry
+    from lqtpy.measures import sensitivity as sm
+    assert "sensitivity" in [m.name for m in registry.list_measures("extra")]
+    big = sm.compute(lqtpy.prepare(S.img(S.ellipsoid((-40, 0, 15), (15, 25, 20)))))
+    small = sm.compute(lqtpy.prepare(S.img(S.sphere((-25, 0, 5), 4))))
+    assert big["volume_level"] == "stable" and small["volume_level"] == "sensitive"
+    assert big["volume_change_min_pct"] < 0 < big["volume_change_max_pct"]
+    assert set(big["variants"]) == {"eroded", "dilated", "smoothed"}
+    words = [d.text for d in sm.interpret(small, {})]
+    assert len(words) == 2 and "volume depends strongly" in words[0]
+    tiny = sm.compute(lqtpy.prepare(S.img(S.sphere((-25, 0, 5), 1))))
+    assert tiny["characterised"] is False and "too small" in sm.interpret(tiny, {})[0].text
+
+
+def test_sensitivity_appears_in_a_report(tmp_path):
+    r = lqtpy.analyze_single(S.img(S.sphere((-40, 10, 10), 8)), out_dir=str(tmp_path), plots=True,
+                             viewer=False, extras="sensitivity")
+    assert r["measures"]["sensitivity"]["values"]["level"] in ("stable", "somewhat sensitive", "sensitive")
+    html = open(r["report_path"], encoding="utf-8").read()
+    assert "Sensitivity" in html and "{&#x27;eroded" not in html and "{'eroded" not in html

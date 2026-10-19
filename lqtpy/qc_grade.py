@@ -352,9 +352,9 @@ def _sparse_extent(p, f, tier) -> None:
     dips = ev.get("dip_slices", [])
     added = None
     if tier == "full" and p.n_voxels:
-        from .qc import repair_gaps
+        from .qc import gap_slices_only, repair_gaps
         try:
-            _, rep = repair_gaps(p, axis=ax)
+            _, rep = repair_gaps(p, axis=ax, slices=gap_slices_only(ev))
             added = rep.get("voxels_added", 0)
         except Exception:
             added = None
@@ -372,7 +372,10 @@ def _sparse_extent(p, f, tier) -> None:
     f.affected_pct = round(missing, 1)
     order = list(dict.fromkeys(list(gaps) + list(dips)))[:20]
     f.locations = [loc_slice(p, ax, k) for k in order]
-    f.fix = {"call": "qc.repair_gaps", "kwargs": {"axis": int(ax)}}
+    from .qc import gap_slices_only
+    only = gap_slices_only(ev)
+    f.fix = {"call": "qc.repair_gaps",
+             "kwargs": {"axis": int(ax), **({"slices": only} if only else {})}}
 
 
 def _flat_extent(p, f) -> None:
@@ -496,7 +499,8 @@ def grade(p, raw: "list[Finding]", opts: dict, tier: str, ctx, mni: bool) -> "li
                              "to MNI space (a registration problem), not just overdrawn.")
                 f.suggestion = "Check the registration to MNI152 and the mask's header."
             f.extent = {"outside_pct": pct, "outside_mm3": ev.get("outside_mm3"),
-                        "max_depth_mm": ev.get("max_depth_mm"), "rim_mm3": ev.get("rim_mm3")}
+                        "max_depth_mm": ev.get("max_depth_mm"), "rim_mm3": ev.get("rim_mm3"),
+                        "far_mm3": ev.get("far_mm3")}
             f.affected_pct = pct
             f.locations = [loc_point(p, _world_to_ijk(p, c["mm"]), n_voxels=c["voxels"])
                            for c in ev.get("chunks", [])]
@@ -535,6 +539,8 @@ def grade(p, raw: "list[Finding]", opts: dict, tier: str, ctx, mni: bool) -> "li
                 g = "moderate" if g in (None, "minor") else g
             if f.id == "edge_artifact":
                 g = g or "minor"
+            if f.id == "outside_brain" and f.evidence.get("far_mm3"):
+                g = g or "minor"        # far from the brain: stray marks, however small
             f.grade = g
             f.severity = severity_for(g)
         out.append(f)

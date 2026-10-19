@@ -195,7 +195,9 @@ an SPM-style deformation field) and LQTpy warps it for you (`lqtpy.native.warp_t
 
 Core covers everything above. **Extras** are measures in `lqtpy.registry`: the built-in
 `shape` extra (surface area, sphericity, solidity, principal axes) with plain-word
-interpretations calibrated on 898 real lesions. Plugins add more through the
+interpretations calibrated on 898 real lesions, and the `sensitivity` extra: how much the
+volume and region damage change if the outline is drawn one voxel smaller, larger or smoother
+(how much weight the exact numbers can bear). Plugins add more through the
 `lqtpy.measures` / `lqtpy.atlases` entry points; `lqtpy new-plugin fractal` writes a
 ready-to-install package (pyproject with the entry point, `compute()`, `interpret()`, tests).
 A plugin that fails to import is reported as unavailable; it never breaks core. Extras are

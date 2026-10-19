@@ -157,7 +157,8 @@ def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
         elif fid == "sparse_slices":
             f = found.get(fid)
             ax = f.evidence.get("axis") if f else None
-            img, rep = qc.repair_gaps(cp, axis=ax)
+            img, rep = qc.repair_gaps(cp, axis=ax,
+                                      slices=qc.gap_slices_only(f.evidence) if f else None)
             cur = np.asarray(img.dataobj) > 0
             if f is not None and f.evidence.get("from_context"):
                 # A lone empty slice at a segment's edge: copy the nearer

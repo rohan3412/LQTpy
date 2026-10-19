@@ -29,7 +29,7 @@ __all__ = ["QC_VERSION", "Finding", "DrawingContext", "QCResult", "GRADE_BANDS",
            "VERDICTS", "grade_of", "severity_for", "verdict_and_score"]
 
 #: Changes whenever QC rules, thresholds or the JSON shape change.
-QC_VERSION = "1.0"
+QC_VERSION = "1.1"
 
 INFO, WARN, ERROR = "info", "warn", "error"
 GRADES = ("minor", "moderate", "major")

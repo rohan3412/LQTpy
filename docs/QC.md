@@ -87,13 +87,13 @@ Below the minor bound the finding is a Note.
 
 | id | Category | What it means | Band (metric: minor / moderate / major) | Locations | Fix |
 |---|---|---|---|---|---|
-| `sparse_slices` | drawing | Drawn on some slices only: empty or nearly empty slices between drawn ones (periodic, or wide gaps between thin slabs), or three or more separate thin sheets in one plane. The space between two separate lesions (one in each hemisphere, say) is not a gap: they taper toward it, slabs end in flat faces. With a drawing context, the exact undrawn slices. | `missing_pct` (share of the lesion's slices missing): 1 / 10 / 25 | the gap slices | `qc.repair_gaps` (interpolate) |
+| `sparse_slices` | drawing | Drawn on some slices only: empty or nearly empty slices between drawn ones (periodic, or wide gaps between thin slabs), or three or more separate thin sheets in one plane. The space between two separate lesions (one in each hemisphere, say) is not a gap: they taper toward it, slabs end in flat faces. One or two empty slices (about 2 mm) between large, overlapping slices are always a gap, however round the pieces: a slice forgotten in a complete lesion. Those are graded on what filling just them adds, and the fix fills just them. With a drawing context, the exact undrawn slices. | `missing_pct` (share of the lesion's slices missing): 1 / 10 / 25 | the gap slices | `qc.repair_gaps` (interpolate) |
 | `flat` | drawing | Drawn on one slice (or a thin slab) only, including a warped 5 mm slice, a wide plate up to 12 mm thick that ends in two flat faces, and a lesion that is mostly one slab with pieces attached. A flat part must be at least 12 mm across (lacunes aren't flat), and plates count only when they hold half the lesion (a small second lesion seen on one thick slice is ordinary). | `flat_pct` (share of the lesion in the slab): 5 / 25 / 50 | the slab's slice | redraw |
 | `hollow` | drawing | Outline only, not filled. | `missing_pct` (volume that filling adds): 5 / 15 / 30 | the outlined slices | `qc.fix(…, ["hollow"])` |
 | `holes` | drawing | Enclosed cavities or "swiss cheese" (pores). Cavities that are CSF or ventricle don't count, and it stays quiet when `sparse_slices` or `hollow` already explains the empty space. | `missing_pct` (share of the filled volume missing): 2 / 10 / 25 | hole centres | `qc.fix(…, ["holes"])` |
 | `strokes` | drawing | Marks one voxel thick off the plane the lesion was drawn in: flat sheets (at least 200 mm² and 6 mm wide), or strips at least 15 mm long where a stroke crosses or leaves the lesion. | `affected_pct`: 0.5 / 5 / 15 | the stroke slices | `qc.clean(strokes=True)` |
 | `box` | drawing | Rectangular blocks, as a rectangle tool leaves (the bounding box is 85% or more filled). | `affected_pct`: 5 / 25 / 60 | block centres | redraw |
-| `outside_brain` | extra | Lesion outside the brain mask, beyond a 5 mm rim tolerance. A rim covering 1% or more of the lesion is a Note. Image-edge fragments are not counted here (they are `edge_artifact`). | `outside_pct`: 1 / 5 / 15 | outside chunks | `qc.clean(outside=True)` |
+| `outside_brain` | extra | Lesion outside the brain mask, beyond a 5 mm rim tolerance. A rim covering 1% or more of the lesion is a Note. Anything more than 10 mm from the brain surface is at least Check, minor, however small: stray marks, not overdrawing. Image-edge fragments are not counted here (they are `edge_artifact`). | `outside_pct`: 1 / 5 / 15 | outside chunks | `qc.clean(outside=True)` |
 | `misregistered` | space | 25% or more lies outside the brain, attached to the lesion: the mask looks shifted, not overdrawn. Always Problem, major. | none | outside chunks | check the registration |
 | `edge_artifact` | extra | Fragments touching the image edge. Always at least minor. | `affected_pct`: 0 / 5 / 20 | fragment centres | `qc.clean(edge=True)` |
 | `specks` | extra | Stray specks. Moderate when they make up 5% or more of the lesion. | `n_specks`: 4 / 100 / – | speck centres | `qc.clean(specks=True)` |
@@ -196,7 +196,7 @@ Times are from `python tools/bench.py` on a desktop PC, with warm caches.
 ```json
 {
   "schema": "lqtpy.qc",
-  "qc_version": "1.0",
+  "qc_version": "1.1",
   "tier": "full",
   "verdict": "fix before use",
   "score": 45,
@@ -231,6 +231,7 @@ new lqtpy release that doesn't touch QC doesn't force a re-run, and one that doe
 | qc_version | lqtpy | Change |
 |---|---|---|
 | 1.0 | 0.6.0 | Graded findings, locations, fix hints, verdict and score, tiers, drawing context; new checks (holes, box, values, inverted, misregistered, fragmentation, plausibility) |
+| 1.1 | 0.6.1 | A short, clear gap through a large lesion is a gap even when the pieces either side are round; such gaps are filled slice by slice (`repair_gaps(slices=...)`); lesion more than 10 mm outside the brain is at least Check, minor |
 
 ## How the checks were tested
 

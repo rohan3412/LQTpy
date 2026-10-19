@@ -74,7 +74,9 @@ DEFAULTS = {
     "outside_min_frac": 0.05,      # ... and this share of the lesion ...
     "outside_min_depth_mm": 5.0,   # ... and reach this far beyond the brain (legacy)
     "outside_rim_mm": 5.0,         # overdrawing within this of the brain edge is a Note only
-    "outside_note_mm3": 20.0,      # below this much outside, nothing is reported
+    "outside_note_mm3": 20.0,      # below this much outside, nothing is reported ...
+    "outside_far_mm": 10.0,        # ... unless some of it is this far from the brain surface:
+                                   # stray marks, never overdrawing (at least Check, minor)
     "not_mni_outside_frac": 0.5,   # more than this outside the brain: wrong space?
     "flat_max_mm": 7.0,            # a sheet thinner than this ...
     "flat_min_ratio": 4.0,         # ... and this many times wider: drawn on one slice
@@ -305,6 +307,7 @@ def _gap_evidence_axis(sub: np.ndarray, axis: int, max_run: int, opts, long_run:
     if start < len(prof):
         segments.append((start, len(prof)))
     n_slices = n_dips = n_gap_slices = n_gap_runs = n_clear = n_dip_runs = n_deep_runs = 0
+    n_clear_empty = 0
     deficit = 0.0
     gap_idx: "list[int]" = []
     dip_idx: "list[int]" = []
@@ -340,6 +343,10 @@ def _gap_evidence_axis(sub: np.ndarray, axis: int, max_run: int, opts, long_run:
                 gap_idx += list(range(off + a, off + b))
                 if min(seg[a - 1], seg[b]) >= 0.3 * peak and ov >= 0.5:
                     n_clear += 1
+                    # a slice or two forgotten (about 2 mm): never the space
+                    # between two separate lesions
+                    if (b - a) <= max(1, int(round(max_run / 6))):
+                        n_clear_empty += 1
         w = max(3, max_run)
         left = np.array([seg[max(0, k - w):k].max() if k > 0 else 0 for k in range(n)])
         right = np.array([seg[k + 1:k + 1 + w].max() if k < n - 1 else 0 for k in range(n)])
@@ -374,7 +381,8 @@ def _gap_evidence_axis(sub: np.ndarray, axis: int, max_run: int, opts, long_run:
     score = frac + n_gap_runs
     return {"score": round(score, 3), "n_slices": int(n_slices), "n_dips": int(n_dips),
             "n_gap_runs": int(n_gap_runs), "n_gap_slices": int(n_gap_slices),
-            "n_clear_gaps": int(n_clear), "dip_fraction": round(frac, 3),
+            "n_clear_gaps": int(n_clear), "n_clear_empty_gaps": int(n_clear_empty),
+            "dip_fraction": round(frac, 3),
             "n_dip_runs": int(n_dip_runs), "n_deep_runs": int(n_deep_runs),
             "dip_deficit_voxels": int(deficit),
             "period": period if strength >= 0.3 else None, "periodicity": round(strength, 3),
@@ -413,8 +421,12 @@ def gap_evidence(lesion, opts=None) -> "dict | None":
         slabs = _slab_ratio(sub, ax)
         ev.update(axis=ax, plane=names[ax], slab_ratio=slabs)
         # Pieces along this axis that are round, separate lesions -- unless
-        # the pieces are thin slabs stacked with gaps between them.
-        if slabs is not None and (slabs > 0.85 or (slabs > 0.6 and not ev["n_gap_runs"])):
+        # the pieces are thin slabs stacked with gaps between them, or a
+        # clear gap cuts one large lesion: fully empty slices with large,
+        # overlapping slices either side (two separate lesions taper toward
+        # each other instead).
+        if (slabs is not None and not ev["n_clear_empty_gaps"]
+                and (slabs > 0.85 or (slabs > 0.6 and not ev["n_gap_runs"]))):
             continue
         gap_ok = ev["n_gap_runs"] >= 1 and slabs is not None
         # Without empty gaps, thin slices alone must form a strong, regular
@@ -1024,8 +1036,9 @@ def _check(p: PreparedLesion, expected_side, mni, opts, ctx=None) -> "list[Flag]
                 # is tolerated; everything beyond it is measured.
                 beyond = outside & (depth_map > opts["outside_rim_mm"])
                 n_beyond = int(beyond.sum())
+                n_far = int((outside & (depth_map >= opts["outside_far_mm"])).sum())
                 rim_pct = 100.0 * (n_out - n_beyond) / max(n_on, 1)
-                if n_beyond * bvox >= opts["outside_note_mm3"] or rim_pct >= 1.0:
+                if n_beyond * bvox >= opts["outside_note_mm3"] or rim_pct >= 1.0 or n_far:
                     order = np.argsort(-chunk)
                     idx = [int(i) + 1 for i in order[:10]]
                     cents = ndimage.center_of_mass(outside, lab, index=idx)
@@ -1046,11 +1059,16 @@ def _check(p: PreparedLesion, expected_side, mni, opts, ctx=None) -> "list[Flag]
                     msg = (f"{n_beyond * bvox:.0f} mm³ of the lesion "
                            f"({100 * n_beyond / max(n_on, 1):.0f}%) lies outside the brain."
                            if n_beyond * bvox >= opts["outside_note_mm3"] else
+                           f"{n_far * bvox:.0f} mm³ of the mask lies far outside the brain, up to "
+                           f"{float(depth.max()):.0f} mm from its surface: stray marks, not "
+                           "overdrawing."
+                           if n_far else
                            f"The lesion is overdrawn past the brain edge by up to "
                            f"{float(depth.max()):.0f} mm ({(n_out - n_beyond) * bvox:.0f} mm³, "
                            f"{rim_pct:.0f}% of the lesion).")
                     flags.append(Flag("outside_brain", WARN, msg,
                                       {"outside_mm3": round(float(n_beyond * bvox), 1),
+                                       "far_mm3": round(float(n_far * bvox), 1),
                                        "outside_pct": round(100.0 * n_beyond / max(n_on, 1), 2),
                                        "rim_mm3": round(float((n_out - n_beyond) * bvox), 1),
                                        "n_chunks": int(nlab), "chunks": chunks,
@@ -1160,8 +1178,24 @@ def _sdt(mask2d: np.ndarray) -> np.ndarray:
     return outside - inside
 
 
+def gap_slices_only(ev: "dict | None") -> "list[int] | None":
+    """The slices to fill when a gap finding is only empty slices inside an
+    otherwise complete drawing (no thinner slices around them): then just
+    those slices are interpolated, from their drawn neighbours. ``None``
+    means the drawing is slabs with gaps, which is rebuilt between slab
+    cores instead (see :func:`repair_gaps`)."""
+    if not ev or ev.get("dip_slices") or not ev.get("gap_slices"):
+        return None
+    # Every gap must be a clear one (large, overlapping slices either side):
+    # a gap between the tapered edges of warped slabs is rebuilt from the
+    # slab cores instead.
+    if ev.get("n_clear_empty_gaps", 0) < max(1, ev.get("n_gap_runs", 0)):
+        return None
+    return sorted({int(k) for k in ev["gap_slices"]})
+
+
 def repair_gaps(lesion, *, axis: "int | None" = None, max_gap_mm: "float | None" = None,
-                threshold: float = 0.5):
+                threshold: float = 0.5, slices: "list[int] | None" = None):
     """Fill sparse-slice gaps by shape-based interpolation. Opt-in only.
 
     Along the gap axis (from :func:`gap_evidence`, or ``axis`` = 0/1/2 on
@@ -1171,6 +1205,13 @@ def repair_gaps(lesion, *, axis: "int | None" = None, max_gap_mm: "float | None"
     (shape-based interpolation). Existing voxels are always kept (the
     result is a superset of the input). The lesion's outermost tips beyond
     the first and last drawn slices are unknown and left alone.
+
+    ``slices`` (slice indices on the lesion grid along ``axis``) fills only
+    those slices instead, each run from the nearest drawn slice on either
+    side: for a slice or two forgotten inside an otherwise complete drawing,
+    where the slab-core method would also reshape the drawn slices between
+    a lumpy lesion's bulges. With ``axis=None`` this is chosen automatically
+    from the gap evidence (:func:`gap_slices_only`).
 
     Returns ``(repaired_img, report)``; ``report`` says which plane was
     used, how many slices were interpolated and how much was added. When no
@@ -1187,8 +1228,35 @@ def repair_gaps(lesion, *, axis: "int | None" = None, max_gap_mm: "float | None"
                     {"repaired": False, "reason": "no sparse-slice pattern found",
                      "voxels_added": 0, "volume_added_mm3": 0.0})
         axis = ev["axis"]
+        if slices is None:
+            slices = gap_slices_only(ev)
     max_gap_mm = DEFAULTS["gap_long_mm"] if max_gap_mm is None else max_gap_mm
     mask = np.moveaxis(p.mask.copy(), axis, 0)
+    if slices is not None:
+        out = mask.copy()
+        n = mask.shape[0]
+        want = {k for k in slices if 0 <= k < n}
+        filled_slices = 0
+        for k0, k1 in _runs(np.isin(np.arange(n), sorted(want))):
+            a, b = k0 - 1, k1                    # nearest drawn slices either side
+            while a >= 0 and not mask[a].any():
+                a -= 1
+            while b < n and not mask[b].any():
+                b += 1
+            if a < 0 or b >= n:
+                continue                         # at the lesion's end: nothing to interpolate from
+            da, db = _sdt(mask[a]), _sdt(mask[b])
+            for k in range(k0, k1):
+                t = (k - a) / (b - a)
+                new = ((1 - t) * da + t * db) <= 0
+                filled_slices += int(np.any(new & ~out[k]))
+                out[k] |= new
+        out = np.moveaxis(out, 0, axis)
+        added = int(out.sum()) - p.n_voxels
+        return (nib.Nifti1Image(out.astype(np.uint8), p.affine),
+                {"repaired": added > 0, "axis": int(axis), "plane": names[axis],
+                 "slices_interpolated": filled_slices, "voxels_added": added,
+                 "volume_added_mm3": round(added * _voxel_mm3(p), 1), "method": "gap slices"})
     prof = mask.reshape(mask.shape[0], -1).sum(1).astype(float)
     # Key slices = the core of each drawn slab: local maxima of the area
     # profile. After an MNI warp a drawn slice is a slab whose edges taper,
@@ -1217,7 +1285,7 @@ def repair_gaps(lesion, *, axis: "int | None" = None, max_gap_mm: "float | None"
     img = nib.Nifti1Image(out.astype(np.uint8), p.affine)
     return img, {"repaired": added > 0, "axis": int(axis), "plane": names[axis],
                  "slices_interpolated": filled_slices, "voxels_added": added,
-                 "volume_added_mm3": round(added * _voxel_mm3(p), 1)}
+                 "volume_added_mm3": round(added * _voxel_mm3(p), 1), "method": "slab cores"}
 
 
 # --------------------------------------------------------------------------- #

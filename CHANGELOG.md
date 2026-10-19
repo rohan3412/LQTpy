@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.1 (2026-10-16)
+
+Mask quality rules version `qc.QC_VERSION` is now **1.1**: caches keyed on it re-run QC.
+
+### Fixed
+- **A forgotten slice in a large lesion was missed** (reported with a real mask): two empty
+  axial slices through a large lesion were found by the gap test, then discarded because the
+  pieces either side were round, which was taken to mean two separate lesions. One or two
+  empty slices (about 2 mm) between large, overlapping slices are now always a gap.
+- **Filling such a gap reshaped the rest of the lesion.** `repair_gaps` interpolates between
+  the cores of drawn slabs; on a complete, lumpy lesion with one forgotten slice that also
+  filled between its bulges (12% added where 2% was missing). It now fills just the gap slices
+  when the gaps are clear (`repair_gaps(slices=...)`, chosen automatically), and the finding's
+  size and `qc.fix` use the same.
+
+### Changed
+- **Lesion far outside the brain is at least Check, minor**, however small: more than 10 mm
+  from the brain surface is a stray mark, not overdrawing (`outside_far_mm`). It was a Note when
+  it was under 20 mm³.
+
+### New
+- **`sensitivity` extra** (`extras="sensitivity"` or `"all"`): redraws the outline one voxel
+  smaller, larger and smoother, and reports how much the volume and the AAL region damage
+  change, in words ("the volume depends strongly on the exact outline (-52% to +72%); region
+  damage is stable to it (up to 2 percentage points)"). Not a quality finding: it says how much
+  weight the exact numbers can bear. About 0.25 s per lesion.
+
+### Checked
+- On the 200 labelled review masks (Claude's labels, docs/QC.md): Check/Problem precision 0.96
+  and recall 0.91, as in 0.6.0, with fewer gaps over-graded (exact grade agreement 82% to 85%).
+  Synthetic library: all 56 cases detected and graded correctly, no false alarms.
+
 ## 0.6.0 (2026-09-30)
 
 Graded, location-aware mask quality checks, built so that drawing tools (MRLatte) and

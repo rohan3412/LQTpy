@@ -470,7 +470,8 @@ def _extras_card(res, manifest) -> str:
         blocks = []
         for name, m in measures.items():
             words = "; ".join(m.get("descriptors") or []) or "No interpretation available."
-            vals = {k: v for k, v in (m.get("values") or {}).items() if k != "per_component"}
+            vals = {k: v for k, v in (m.get("values") or {}).items()
+                    if k != "per_component" and not isinstance(v, (dict, list))}
             rows = "".join(f'<tr><td>{_esc(k.replace("_", " "))}</td><td class="n">{_esc(v)}</td></tr>'
                            for k, v in vals.items())
             blocks.append(f'<h3 class="section-title">{_esc(name.capitalize())}</h3>'
