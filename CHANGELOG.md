@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+Faster everywhere, smaller, and three new drawing checks from notes on real masks. Mask
+quality rules version `qc.QC_VERSION` is now **1.2**: caches keyed on it re-run QC.
+
+### New quality checks (from the user's notes on Lesion Registry masks)
+- **`comb`** (comb-like): each slice's outline ends somewhere else, so the edge is a comb of
+  steps across the slices. Measured against a smoothed copy of the same lesion; a Note from
+  2.0 times a smooth outline's slice-to-slice change, a Check from 2.5.
+- **`blocky`**: one outline copied over many slices, then a jump (a drawing on thick slices
+  stretched onto a thin grid). A Note from 10% of the lesion in blocks; a Check from 35%;
+  moderate from 65% in blocks 10 mm or thicker.
+- **`partial_gaps`**: slices drawn only partly (a region both neighbouring slices hold is
+  missing). Always at least a Check, graded by the share missing; `qc.fix(…, ["partial_gaps"])`
+  fills just those regions.
+- **Checks add up**: several moderate or minor findings make a mask "fix before use" (two
+  moderate, one moderate and two minor, or four minor), as one major finding does.
+- On the 17 masks noted by the user: every comb-like and blocky mask is now flagged; the one
+  marked "would mark as severe" is now "fix before use". See docs/QC.md.
+
+### Faster (same results)
+Every output of 0.6.1 is reproduced exactly (100 recorded cases, synthetic and real, plus group
+and command-line runs, compared byte for byte). Examples below are from real 0.74 mm and 1 mm
+masks.
+- A lesion on an atlas grid is kept as its voxel list, not a full-size array: region overlap,
+  coverage, the description, tissue, border zones, tracts and disconnection work in time
+  proportional to the lesion, not the 7–11 million-voxel grid.
+- Atlas label volumes are held in C order, so lookups no longer copy the whole volume (the
+  tissue lookup did once per lesion part: 1.5 s of 2.9 s on a 212-part mask).
+- Quality checks scan each part of a lesion inside its own bounding box (the image-edge check
+  took 1.5 s of 3.7 s on a mask with 221 edge fragments); the outside-the-brain check works in
+  the lesion's box; its depth map is cached on disk and built by `preload()`.
+- `prepare` skips redundant passes over the image and builds its binary image only when asked;
+  mirror images, lesion parts and repair steps reuse the prepared mask instead of re-preparing
+  a full-size copy.
+- Report figures draw the template layers (glass-brain outlines, flat-map regions, viewer
+  background) once per process.
+
+### Smaller
+- Removed the unused matplotlib chart helpers from `lqtpy.plotting` (`glass_brain_png` and
+  `use_agg` stay) and the `lqtpy.ggseg_flat` module behind them: reports draw their own
+  figures since 0.5.
+- One build-once helper (`lqtpy._diskcache.once`) replaces six hand-written lazily built
+  singletons; dead helpers and imports removed.
+
+### Fixed
+- A deadlock when an atlas's per-region counts were asked for before its label volume (latent
+  in 0.6.1; exposed by a new call order). The build locks are re-entrant now.
+
 ## 0.6.1 (2026-10-16)
 
 Mask quality rules version `qc.QC_VERSION` is now **1.1**: caches keyed on it re-run QC.

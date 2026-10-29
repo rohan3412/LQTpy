@@ -181,9 +181,10 @@ class Atlas:
     _region_voxels: "np.ndarray | None" = field(default=None, repr=False)
     #: Guards the double-checked lazy build of the two arrays above so
     #: concurrent first callers build exactly once and all see the same
-    #: (read-only) array, never a half-built one.
-    _build_lock: threading.Lock = field(default_factory=threading.Lock,
-                                        repr=False, compare=False)
+    #: (read-only) array, never a half-built one. Re-entrant: building the
+    #: voxel counts builds the label array under the same lock.
+    _build_lock: threading.RLock = field(default_factory=threading.RLock,
+                                         repr=False, compare=False)
 
     def label_array(self) -> np.ndarray:
         """Integer label volume, loaded once and cached on the atlas.
@@ -202,7 +203,9 @@ class Atlas:
                     arr32 = raw.astype(np.int32)
                     max_label = int(arr32.max()) if arr32.size else 0
                     dtype = _smallest_signed_dtype(max_label)
-                    arr = arr32.astype(dtype)
+                    # C order, so flat indexing (lesion voxel lists) is a view,
+                    # not a copy of the whole volume.
+                    arr = np.ascontiguousarray(arr32, dtype=dtype)
                     arr.flags.writeable = False
                     self._label_array = arr
         return self._label_array
@@ -643,9 +646,9 @@ def preload(keys: "list[str] | None" = None) -> None:
     Call this once from FastAPI startup so the first request that needs an
     atlas doesn't pay the (one-time) load cost. Defaults to every *core*
     atlas plus host-registered ones (plugin atlases load on first use, since
-    some fetch data). Also preloads the tract proxy index, the QC brain mask,
-    the tissue distance maps, the border-zone map, the key-structure
-    distance maps,
+    some fetch data). Also preloads the tract proxy index, the QC brain mask
+    and outside-the-brain depth map, the tissue distance maps, the
+    border-zone map, the key-structure distance maps,
     and, if one has been built locally, the per-tract disconnection index --
     a no-op, not an error, when it hasn't.
     """
@@ -660,7 +663,8 @@ def preload(keys: "list[str] | None" = None) -> None:
         _tracts._load_tracts()
     if "dk" in keys and "aal" in keys:
         from . import qc as _qc
-        _qc.brain_mask()  # QC's out-of-brain / MNI checks (~0.6 s once)
+        _qc.brain_mask()      # QC's out-of-brain / MNI checks
+        _qc._outside_depth()  # how far outside the brain (overdrawing vs stray marks)
     if "tissue" in keys:
         from . import tissue as _tissue
         _tissue.distance_maps()  # location classes

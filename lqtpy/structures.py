@@ -50,7 +50,6 @@ KEY_STRUCTURES = {
 }
 
 #: Distances are stored capped at this (mm); anything farther reads as ">= 60".
-_CAP_MM = 63.75
 _DIST: dict = {}
 _lock = threading.Lock()
 
@@ -185,12 +184,12 @@ def cross_section_load(lesion, *, threshold: float = 0.5, min_overlap_pct: float
 
 def _cross(p, cache, min_overlap_pct):
     shape, aff = cache["shape"], np.asarray(cache["ref"].affine, float)
-    flat = p.on_grid(cache["ref"]).mask.ravel()
+    flat = p.on_grid(cache["ref"]).mask.reshape(-1)
     vox_mm2 = float(np.prod(np.linalg.norm(aff[:3, :3], axis=0)[:2]))
     rows = []
     for t in cache["tracts"]:
         hit = flat[t["idx"]]
-        n_hit = int(hit.sum())
+        n_hit = int(np.count_nonzero(hit))
         if not n_hit:
             continue
         pct = 100.0 * n_hit / t["n_vox"]

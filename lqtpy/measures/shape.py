@@ -200,19 +200,17 @@ def shape_of(mask_sub: np.ndarray, offset, affine) -> dict:
 
 
 def compute(prepared) -> dict:
-    from ..morphometry import components
+    from ..morphometry import component_boxes, components
 
     labels, lo, sizes = components(prepared)
+    boxes = component_boxes(prepared)
     per = []
     for i in range(min(len(sizes), MAX_COMPONENTS)):
         if sizes[i] < MIN_VOXELS:
             break  # sizes are sorted, largest first
-        comp = labels == (i + 1)
-        nz = np.nonzero(comp)
-        clo = [a.min() for a in nz]
-        chi = [a.max() + 1 for a in nz]
-        sub = comp[clo[0]:chi[0], clo[1]:chi[1], clo[2]:chi[2]]
-        vals = shape_of(sub, np.asarray(clo) + lo, prepared.affine)
+        sl = boxes[i]                       # the part's own bounding box
+        sub = labels[sl] == (i + 1)
+        vals = shape_of(sub, np.asarray([s.start for s in sl]) + lo, prepared.affine)
         vals["component"] = i + 1
         per.append(vals)
     if per:

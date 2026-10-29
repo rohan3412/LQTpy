@@ -25,11 +25,12 @@ __all__ = ["problem_mask", "PROBLEM_KIND", "FIXABLE", "fix", "assess_folder", "r
 
 PROBLEM_KIND = {
     "specks": "remove", "strokes": "remove", "edge_artifact": "remove", "outside_brain": "remove",
-    "sparse_slices": "add", "holes": "add", "hollow": "add",
+    "sparse_slices": "add", "holes": "add", "hollow": "add", "partial_gaps": "add",
     "flat": "inspect", "box": "inspect", "misregistered": "inspect",
 }
 #: Findings :func:`fix` can repair on its own.
-FIXABLE = ("edge_artifact", "specks", "strokes", "outside_brain", "holes", "hollow", "sparse_slices")
+FIXABLE = ("edge_artifact", "specks", "strokes", "outside_brain", "holes", "hollow", "sparse_slices",
+           "partial_gaps")
 _S26 = np.ones((3, 3, 3), bool)
 
 
@@ -117,7 +118,7 @@ def problem_mask(lesion, finding, *, threshold: float = 0.5, **options) -> np.nd
         return _place(p, svox, lo)
     if fid == "outside_brain":
         return _outside_voxels(p, opts, rim_only=f.grade is None)
-    if fid in ("holes", "hollow", "sparse_slices"):
+    if fid in ("holes", "hollow", "sparse_slices", "partial_gaps"):
         img, rep = fix(p, [fid], threshold=threshold)
         return rep["added"]
     return np.zeros(p.shape, bool)
@@ -125,8 +126,8 @@ def problem_mask(lesion, finding, *, threshold: float = 0.5, **options) -> np.nd
 
 def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
     """Repair what lqtpy can repair safely: strokes, specks, edge fragments,
-    voxels beyond the brain edge (removed), gaps between drawn slices,
-    enclosed holes and unfilled outlines (filled).
+    voxels beyond the brain edge (removed), gaps between drawn slices, partly
+    drawn slices, enclosed holes and unfilled outlines (filled).
 
     ``ids``: finding ids to fix (default: every fixable finding the mask
     has). Returns ``(new_image, report)``; the input is never changed.
@@ -149,7 +150,7 @@ def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
         if fid not in found and ids is None:
             continue
         before = cur.copy()
-        cp = prepare(nib.Nifti1Image(cur.astype(np.uint8), p.affine), 0.5, name=p.name)
+        cp = p._derived(cur.copy(), name=p.name, threshold=0.5)
         if fid in ("edge_artifact", "specks", "strokes", "outside_brain"):
             img, _ = qc.clean(cp, specks=fid == "specks", edge=fid == "edge_artifact",
                               strokes=fid == "strokes", outside=fid == "outside_brain")
@@ -175,6 +176,8 @@ def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
         elif fid == "holes":
             from .qc_grade import hole_voxels
             cur = cur | hole_voxels(cur, opts)
+        elif fid == "partial_gaps":
+            cur = cur | qc._partial_gap_voxels(cp, **options)
         elif fid == "hollow":
             f = found.get(fid)
             names = qc.slice_axis_names(p.affine)

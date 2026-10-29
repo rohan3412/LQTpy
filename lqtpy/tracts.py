@@ -20,24 +20,18 @@ once and cached for reuse across every lesion/subject.
 from __future__ import annotations
 
 import os
-import threading
 
 import numpy as np
 import nibabel as nib
 
 from .atlases import DATA_DIR
 from .errors import DataUnavailableError, MissingDependencyError
+from ._diskcache import once
 
 # Precomputed tract voxel indices (built by tools/build_tract_index.py). Reading
 # the raw 4D nifti per-volume re-decompresses the whole gzip stream (~130 s), so
 # we ship this compact index instead.
 _TRACT_NPZ = os.path.join(DATA_DIR, "hcp842_tracts.npz")
-
-_TRACTS_CACHE = None
-#: Guards the double-checked lazy build of _TRACTS_CACHE so concurrent first
-#: callers build exactly once and all see the same object.
-_tracts_lock = threading.Lock()
-
 
 def tracts_available() -> bool:
     return os.path.exists(_TRACT_NPZ)
@@ -54,40 +48,26 @@ def _pretty(name: str) -> tuple[str, str]:
     return (f"{pretty} ({hemi})" if hemi else pretty), hemi
 
 
+@once
 def _load_tracts():
     """Load and cache the precomputed per-tract voxel indices + a 3D ref image."""
-    global _TRACTS_CACHE
-    if _TRACTS_CACHE is not None:
-        return _TRACTS_CACHE
-
-    with _tracts_lock:
-        if _TRACTS_CACHE is not None:
-            return _TRACTS_CACHE
-
-        if not tracts_available():
-            raise DataUnavailableError(
-                f"White-matter tract index not found at '{_TRACT_NPZ}'. This "
-                "data file should ship inside the package; reinstall lqtpy.")
-
-        npz = np.load(_TRACT_NPZ, allow_pickle=False)
-        shape3 = tuple(int(s) for s in npz["shape"])
-        affine = npz["affine"]
-        names = list(npz["names"])
-        ref = nib.Nifti1Image(np.zeros(shape3, dtype=np.uint8), affine)
-
-        tracts = []
-        for i, name in enumerate(names):
-            key = f"idx_{i}"
-            if key not in npz.files:
-                continue
-            idx = npz[key]
-            idx.flags.writeable = False
-            pretty, hemi = _pretty(str(name))
-            tracts.append({"name": pretty, "hemi": hemi,
-                           "idx": idx, "n_vox": int(idx.size)})
-
-        _TRACTS_CACHE = {"ref": ref, "shape": shape3, "tracts": tracts}
-        return _TRACTS_CACHE
+    if not tracts_available():
+        raise DataUnavailableError(
+            f"White-matter tract index not found at '{_TRACT_NPZ}'. This "
+            "data file should ship inside the package; reinstall lqtpy.")
+    npz = np.load(_TRACT_NPZ, allow_pickle=False)
+    shape3 = tuple(int(s) for s in npz["shape"])
+    ref = nib.Nifti1Image(np.zeros(shape3, dtype=np.uint8), npz["affine"])
+    tracts = []
+    for i, name in enumerate(npz["names"]):
+        key = f"idx_{i}"
+        if key not in npz.files:
+            continue
+        idx = npz[key]
+        idx.flags.writeable = False
+        pretty, hemi = _pretty(str(name))
+        tracts.append({"name": pretty, "hemi": hemi, "idx": idx, "n_vox": int(idx.size)})
+    return {"ref": ref, "shape": shape3, "tracts": tracts}
 
 
 _COLUMNS = ["Tract", "Hemi", "TractVoxels", "LesionVoxels",
@@ -107,12 +87,13 @@ def tract_overlap(lesion_img, frame: str | None = None):
 
     cache = _load_tracts()
     p = lesion_img if isinstance(lesion_img, PreparedLesion) else prepare(lesion_img, threshold=0.0)
-    mask_flat = p.on_grid(cache["ref"]).mask.ravel()
-    lesion_total = int(mask_flat.sum())
+    gm = p.on_grid(cache["ref"])
+    mask_flat = gm.mask.reshape(-1)
+    lesion_total = gm.n_voxels
 
     rows = []
     for t in cache["tracts"]:
-        inter = int(mask_flat[t["idx"]].sum())
+        inter = int(np.count_nonzero(mask_flat[t["idx"]]))
         if inter == 0:
             continue
         rows.append({

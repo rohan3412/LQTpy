@@ -56,8 +56,16 @@ def _finish(records, columns, frame):
     return records
 
 
+def _labels_under(mask, atlas: Atlas) -> np.ndarray:
+    """The atlas label at each lesion voxel (``labels[mask]``); ``mask`` is a
+    boolean array on the atlas grid or a :class:`~lqtpy.prepared.GridMask`."""
+    from .prepared import flat_indices
+    return atlas.label_array().reshape(-1)[flat_indices(mask)]
+
+
 def region_overlap_from_mask(mask, atlas: Atlas, frame: str | None = None):
-    """Per-region damage from a boolean lesion mask already on the atlas grid.
+    """Per-region damage from a lesion mask already on the atlas grid (a
+    boolean array, or a :class:`~lqtpy.prepared.GridMask`).
 
     Uses the atlas's cached label array and per-label voxel counts, so the
     subject-invariant region volumes are computed once (not per call).
@@ -66,11 +74,9 @@ def region_overlap_from_mask(mask, atlas: Atlas, frame: str | None = None):
     RegionVoxels, LesionVoxels, PercentDamage, PercentOfLesion, sorted by
     PercentDamage descending. Pass ``frame="pandas"`` for a DataFrame.
     """
-    labels = atlas.label_array()
     region_voxels = atlas.region_voxels()
-
-    lesion_total = int(mask.sum())
-    hit = labels[mask]                       # region id at each lesion voxel
+    hit = _labels_under(mask, atlas)         # region id at each lesion voxel
+    lesion_total = int(hit.size)
     lesion_by_region = np.bincount(hit[hit > 0])
 
     rows = []
@@ -106,12 +112,7 @@ def region_overlap(lesion, atlas: Atlas, frame: str | None = None):
 
     ``lesion`` is a :class:`~lqtpy.prepared.PreparedLesion` or a binary
     image (``> 0`` = lesion)."""
-    return region_overlap_from_mask(_grid_mask(lesion, atlas).mask, atlas, frame=frame)
-
-
-_COVERAGE_KEYS = ["LesionVoxelsOnGrid", "LabelledVoxels", "UnlabelledVoxels",
-                  "PercentLabelled", "PercentUnlabelled",
-                  "OutsideFOVVoxels", "PercentOutsideFOV"]
+    return region_overlap_from_mask(_grid_mask(lesion, atlas), atlas, frame=frame)
 
 
 def coverage(lesion, atlas: Atlas) -> dict:
@@ -127,9 +128,9 @@ def coverage(lesion, atlas: Atlas) -> dict:
       lesion's own grid) that fall outside the atlas's field of view.
     """
     gm = _grid_mask(lesion, atlas)
-    labels = atlas.label_array()
-    hit = labels[gm.mask]
-    known = np.zeros(max(int(labels.max()), max(atlas.labels, default=0)) + 1, dtype=bool)
+    hit = _labels_under(gm, atlas)
+    top = len(atlas.region_voxels()) - 1     # the largest label id in the volume
+    known = np.zeros(max(top, max(atlas.labels, default=0)) + 1, dtype=bool)
     ids = np.fromiter((k for k in atlas.labels if k >= 0), dtype=np.int64)
     known[ids[ids < known.size]] = True
     labelled = int(np.count_nonzero(known[hit[hit >= 0]])) if hit.size else 0

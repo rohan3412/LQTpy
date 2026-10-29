@@ -22,8 +22,8 @@ p code,li code,td code{background:var(--code);border-radius:5px;padding:1px 5px}
 td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
 </style></head><body><header><b>LQTpy</b><nav><a href="index.html">Overview</a><a href="cli.html">Command line</a><a href="api.html">Python API</a><a href="gallery.html">Gallery</a></nav></header><main><h1>Command line</h1><pre>usage: lqtpy [-h] [--version] [--config CONFIG] COMMAND ...
 
-Lesion morphometry, atlas overlap, quality checks and plain-language
-descriptions, with self-contained HTML reports.
+Lesion morphometry, atlas overlap, quality checks and plain-language descriptions, with self-
+contained HTML reports.
 
 positional arguments:
   COMMAND
@@ -31,8 +31,7 @@ positional arguments:
     group          Analyse a group of lesions.
     describe       Print the plain-language description of a lesion.
     qc             Quality flags for a lesion, or a page for a whole folder.
-    clean          Remove image-edge artefacts and specks into a new mask
-                   (opt-in).
+    clean          Remove image-edge artefacts and specks into a new mask (opt-in).
     repair         Interpolate sparse-slice gaps into a new mask (opt-in).
     warp           Warp a native-space mask to MNI.
     rerun          Repeat the analysis recorded in a report.
@@ -50,12 +49,10 @@ options:
 
 Settings file: lqtpy.toml (see `lqtpy config`). Docs: README.md.
 </pre><h2 id="single">lqtpy single</h2><pre>usage: lqtpy single [-h] [--atlas ATLAS] [--out OUT] [--threshold THRESHOLD]
-                    [--profile {stroke,small_vessel,tumour,research}]
-                    [--extras EXTRAS] [--no-tracts] [--no-disconnection]
-                    [--no-qc] [--no-describe] [--no-viewer]
-                    [--anonymise [KEY_FILE]] [--quiet] [--pdf]
-                    [--expected-side {left,right}] [--native NATIVE]
-                    [--transform TRANSFORM]
+                    [--profile {stroke,small_vessel,tumour,research}] [--extras EXTRAS]
+                    [--no-tracts] [--no-disconnection] [--no-qc] [--no-describe] [--no-viewer]
+                    [--anonymise [KEY_FILE]] [--quiet] [--pdf] [--expected-side {left,right}]
+                    [--native NATIVE] [--transform TRANSFORM]
                     lesion
 
 positional arguments:
@@ -64,46 +61,38 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --atlas ATLAS, -a ATLAS
-                        Atlas to use (repeatable): aal, schaefer, dk, jhu,
-                        arterial. Default: aal, schaefer, dk, jhu, arterial.
+                        Atlas to use (repeatable): aal, schaefer, dk, jhu, arterial. Default: aal,
+                        schaefer, dk, jhu, arterial.
   --out OUT, -o OUT     Output folder. Default: lqtpy_output/&lt;name&gt;.
   --threshold THRESHOLD, -t THRESHOLD
-                        A voxel is lesion when its value is greater than this
-                        (default 0.5).
+                        A voxel is lesion when its value is greater than this (default 0.5).
   --profile {stroke,small_vessel,tumour,research}
                         Description style (default: stroke).
-  --extras EXTRAS       Extra measures: &quot;none&quot; (default), &quot;all&quot;, or a comma
-                        list, e.g. &quot;shape&quot;.
+  --extras EXTRAS       Extra measures: &quot;none&quot; (default), &quot;all&quot;, or a comma list, e.g. &quot;shape&quot;.
   --no-tracts           Skip white-matter tract overlap.
-  --no-disconnection    Skip streamline disconnection even if an index is
-                        installed.
+  --no-disconnection    Skip streamline disconnection even if an index is installed.
   --no-qc               Skip mask quality checks.
   --no-describe         Skip the written description.
   --no-viewer           Leave out the slice viewer (smaller report).
   --anonymise [KEY_FILE], --anonymize [KEY_FILE]
-                        Write IDs instead of file names everywhere; the
-                        private key file maps them back (default
-                        &lt;out&gt;/anonymisation_key.csv).
+                        Write IDs instead of file names everywhere; the private key file maps them
+                        back (default &lt;out&gt;/anonymisation_key.csv).
   --quiet, -q           Print only the report path.
-  --pdf                 Also save the report as PDF (needs
-                        Edge/Chrome/Chromium).
+  --pdf                 Also save the report as PDF (needs Edge/Chrome/Chromium).
   --expected-side {left,right}
                         Flag the lesion if most of it is on the other side.
-  --native NATIVE       The same lesion as a native-space mask: drawing checks
-                        (gaps, single slice, outline) run on it.
+  --native NATIVE       The same lesion as a native-space mask: drawing checks (gaps, single slice,
+                        outline) run on it.
   --transform TRANSFORM
-                        LESION is a native-space mask: warp it to MNI with
-                        this 4x4 matrix (text file, native mm -&gt; MNI mm) or
-                        deformation field, then analyse.
+                        LESION is a native-space mask: warp it to MNI with this 4x4 matrix (text
+                        file, native mm -&gt; MNI mm) or deformation field, then analyse.
 </pre><h2 id="group">lqtpy group</h2><pre>usage: lqtpy group [-h] [--atlas ATLAS] [--out OUT] [--threshold THRESHOLD]
-                   [--profile {stroke,small_vessel,tumour,research}]
-                   [--extras EXTRAS] [--no-tracts] [--no-disconnection]
-                   [--no-qc] [--no-describe] [--no-viewer]
-                   [--anonymise [KEY_FILE]] [--quiet] [--pdf] [--pdf-bundle]
-                   [--no-subject-reports] [--metadata METADATA]
-                   [--subject-column SUBJECT_COLUMN] [--group-by GROUP_BY]
-                   [--compare COLUMN [A B] [COLUMN [A B] ...]]
-                   [--side-column SIDE_COLUMN] [--jobs JOBS] [--incremental]
+                   [--profile {stroke,small_vessel,tumour,research}] [--extras EXTRAS] [--no-tracts]
+                   [--no-disconnection] [--no-qc] [--no-describe] [--no-viewer]
+                   [--anonymise [KEY_FILE]] [--quiet] [--pdf] [--pdf-bundle] [--no-subject-reports]
+                   [--metadata METADATA] [--subject-column SUBJECT_COLUMN] [--group-by GROUP_BY]
+                   [--compare COLUMN [A B] [COLUMN [A B] ...]] [--side-column SIDE_COLUMN]
+                   [--jobs JOBS] [--incremental]
                    lesions [lesions ...]
 
 positional arguments:
@@ -112,49 +101,41 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --atlas ATLAS, -a ATLAS
-                        Atlas to use (repeatable): aal, schaefer, dk, jhu,
-                        arterial. Default: aal, schaefer, dk, jhu, arterial.
+                        Atlas to use (repeatable): aal, schaefer, dk, jhu, arterial. Default: aal,
+                        schaefer, dk, jhu, arterial.
   --out OUT, -o OUT     Output folder. Default: lqtpy_output/&lt;name&gt;.
   --threshold THRESHOLD, -t THRESHOLD
-                        A voxel is lesion when its value is greater than this
-                        (default 0.5).
+                        A voxel is lesion when its value is greater than this (default 0.5).
   --profile {stroke,small_vessel,tumour,research}
                         Description style (default: stroke).
-  --extras EXTRAS       Extra measures: &quot;none&quot; (default), &quot;all&quot;, or a comma
-                        list, e.g. &quot;shape&quot;.
+  --extras EXTRAS       Extra measures: &quot;none&quot; (default), &quot;all&quot;, or a comma list, e.g. &quot;shape&quot;.
   --no-tracts           Skip white-matter tract overlap.
-  --no-disconnection    Skip streamline disconnection even if an index is
-                        installed.
+  --no-disconnection    Skip streamline disconnection even if an index is installed.
   --no-qc               Skip mask quality checks.
   --no-describe         Skip the written description.
   --no-viewer           Leave out the slice viewer (smaller report).
   --anonymise [KEY_FILE], --anonymize [KEY_FILE]
-                        Write IDs instead of file names everywhere; the
-                        private key file maps them back (default
-                        &lt;out&gt;/anonymisation_key.csv).
+                        Write IDs instead of file names everywhere; the private key file maps them
+                        back (default &lt;out&gt;/anonymisation_key.csv).
   --quiet, -q           Print only the report path.
-  --pdf                 Also save the report as PDF (needs
-                        Edge/Chrome/Chromium).
-  --pdf-bundle          PDFs of the group and every subject, merged into one
-                        with bookmarks (the merge needs pypdf).
+  --pdf                 Also save the report as PDF (needs Edge/Chrome/Chromium).
+  --pdf-bundle          PDFs of the group and every subject, merged into one with bookmarks (the
+                        merge needs pypdf).
   --no-subject-reports  Don&#x27;t write one report per subject.
   --metadata METADATA, -m METADATA
-                        CSV/TSV with one row per subject (age, condition,
-                        side, scores).
+                        CSV/TSV with one row per subject (age, condition, side, scores).
   --subject-column SUBJECT_COLUMN
                         Metadata column naming the subject.
   --group-by GROUP_BY   Metadata column to summarise the cohort by.
   --compare COLUMN [A B] [COLUMN [A B] ...]
-                        Compare two groups: a metadata column with two values,
-                        or COLUMN A B.
+                        Compare two groups: a metadata column with two values, or COLUMN A B.
   --side-column SIDE_COLUMN
-                        Metadata column with the lesion (or symptom) side for
-                        the flip check; &quot;auto&quot; finds one, &quot;none&quot; turns it off.
+                        Metadata column with the lesion (or symptom) side for the flip check; &quot;auto&quot;
+                        finds one, &quot;none&quot; turns it off.
   --jobs JOBS, -j JOBS  Worker processes (-1: one per CPU). Default 1.
-  --incremental         Reuse results from an earlier run into the same folder
-                        for unchanged files.
-</pre><h2 id="describe">lqtpy describe</h2><pre>usage: lqtpy describe [-h] [--profile {stroke,small_vessel,tumour,research}]
-                      [--atlas {dk,aal}] [--threshold THRESHOLD] [--shape]
+  --incremental         Reuse results from an earlier run into the same folder for unchanged files.
+</pre><h2 id="describe">lqtpy describe</h2><pre>usage: lqtpy describe [-h] [--profile {stroke,small_vessel,tumour,research}] [--atlas {dk,aal}]
+                      [--threshold THRESHOLD] [--shape]
                       lesion
 
 positional arguments:
@@ -166,8 +147,9 @@ options:
   --atlas {dk,aal}      Atlas for the lobe/region hierarchy (default dk).
   --threshold THRESHOLD, -t THRESHOLD
   --shape               Add shape descriptors (an extra).
-</pre><h2 id="qc">lqtpy qc</h2><pre>usage: lqtpy qc [-h] [--threshold THRESHOLD] [--expected-side {left,right}]
-                [--out OUT] [--recursive] [--clean-to NEW_FOLDER]
+</pre><h2 id="qc">lqtpy qc</h2><pre>usage: lqtpy qc [-h] [--threshold THRESHOLD] [--expected-side {left,right}] [--out OUT]
+                [--recursive] [--clean-to NEW_FOLDER] [--json [FILE]] [--tier {header,fast,full}]
+                [--context JSON_FILE] [--jobs JOBS]
                 lesion
 
 positional arguments:
@@ -177,14 +159,18 @@ options:
   -h, --help            show this help message and exit
   --threshold THRESHOLD, -t THRESHOLD
   --expected-side {left,right}
-  --out OUT, -o OUT     Folder: where to write the HTML page (default
-                        &lt;folder&gt;/lqtpy_qc.html).
+  --out OUT, -o OUT     Folder: where to write the HTML page (default &lt;folder&gt;/lqtpy_qc.html).
   --recursive, -r       Folder: include subfolders.
   --clean-to NEW_FOLDER
-                        Folder: write cleaned copies of flagged masks here
-                        (never overwrites).
-</pre><h2 id="clean">lqtpy clean</h2><pre>usage: lqtpy clean [-h] --out OUT [--keep-specks] [--threshold THRESHOLD]
-                   lesion
+                        Folder: write cleaned copies of flagged masks here (never overwrites).
+  --json [FILE]         Print the graded result as JSON (or write it to FILE); for a folder, every
+                        mask plus a summary.
+  --tier {header,fast,full}
+                        header: header only (no voxel read); fast: skip the slower checks; full
+                        (default): everything.
+  --context JSON_FILE   Drawing context from a drawing tool (drawn slices, drawing plane, base).
+  --jobs JOBS, -j JOBS  Folder: worker processes.
+</pre><h2 id="clean">lqtpy clean</h2><pre>usage: lqtpy clean [-h] --out OUT [--keep-specks] [--strokes] [--threshold THRESHOLD] lesion
 
 positional arguments:
   lesion
@@ -193,6 +179,7 @@ options:
   -h, --help            show this help message and exit
   --out OUT, -o OUT     Path for the cleaned .nii.gz
   --keep-specks         Only remove image-edge artefacts.
+  --strokes             Also remove thin strokes (lines or sheets drawn by mistake).
   --threshold THRESHOLD, -t THRESHOLD
 </pre><h2 id="repair">lqtpy repair</h2><pre>usage: lqtpy repair [-h] --out OUT [--threshold THRESHOLD] lesion
 
@@ -203,8 +190,7 @@ options:
   -h, --help            show this help message and exit
   --out OUT, -o OUT     Path for the repaired .nii.gz
   --threshold THRESHOLD, -t THRESHOLD
-</pre><h2 id="warp">lqtpy warp</h2><pre>usage: lqtpy warp [-h] --transform TRANSFORM --out OUT [--threshold THRESHOLD]
-                  lesion
+</pre><h2 id="warp">lqtpy warp</h2><pre>usage: lqtpy warp [-h] --transform TRANSFORM --out OUT [--threshold THRESHOLD] lesion
 
 positional arguments:
   lesion
@@ -212,13 +198,10 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --transform TRANSFORM
-                        4x4 matrix text file (native mm -&gt; MNI mm, RAS) or
-                        deformation field image.
+                        4x4 matrix text file (native mm -&gt; MNI mm, RAS) or deformation field image.
   --out OUT, -o OUT     Path for the MNI .nii.gz
   --threshold THRESHOLD, -t THRESHOLD
-</pre><h2 id="rerun">lqtpy rerun</h2><pre>usage: lqtpy rerun [-h] [--out OUT] [--search FOLDER] [--allow-changed]
-                   [--quiet]
-                   report
+</pre><h2 id="rerun">lqtpy rerun</h2><pre>usage: lqtpy rerun [-h] [--out OUT] [--search FOLDER] [--allow-changed] [--quiet] report
 
 positional arguments:
   report             An LQTpy report .html
@@ -230,8 +213,7 @@ options:
   --allow-changed    Run even if an input file has changed since the report.
   --quiet, -q
 </pre><h2 id="watch">lqtpy watch</h2><pre>usage: lqtpy watch [-h] --out OUT [--interval INTERVAL] [--metadata METADATA]
-                   [--profile {stroke,small_vessel,tumour,research}]
-                   [--jobs JOBS]
+                   [--profile {stroke,small_vessel,tumour,research}] [--jobs JOBS]
                    folder
 
 positional arguments:
@@ -248,8 +230,7 @@ options:
 
 options:
   -h, --help       show this help message and exit
-  --host HOST      Address to listen on (default 127.0.0.1: this computer
-                   only).
+  --host HOST      Address to listen on (default 127.0.0.1: this computer only).
   --port PORT
   --max-mb MAX_MB  Largest upload in MB (default 300).
   --open           Open the page in the browser.

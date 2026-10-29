@@ -44,6 +44,7 @@ from . import registry
 from . import tracts as _tracts
 from .atlases import DEFAULT_ATLASES, load_atlas
 from .errors import DataUnavailableError, InvalidLesionError, MissingDependencyError
+from .qc_model import _jsonable
 from .manifest import FAILED, RAN, SKIPPED, UNAVAILABLE, Manifest
 from .morphometry import compute_morphometry
 from .overlap import (_COLUMNS as _DAMAGE_COLUMNS, _HOMOLOG_COLUMNS,
@@ -266,16 +267,6 @@ def _count_by(values) -> dict:
     return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
 
-def _jsonable(o):
-    if isinstance(o, np.generic):
-        return o.item()
-    if isinstance(o, np.ndarray):
-        return o.tolist()
-    if isinstance(o, (set, tuple)):
-        return list(o)
-    return str(o)
-
-
 # --------------------------------------------------------------------------- #
 # One lesion, no file output
 # --------------------------------------------------------------------------- #
@@ -346,7 +337,7 @@ def _analyse(p, atlases, *, kind, tracts, plots, qc, describe, profile, extras,
     for i, key in enumerate(atlases):
         atlas = load_atlas(key)
         gm = p.on_grid(atlas.img)
-        df = region_overlap_from_mask(gm.mask, atlas)
+        df = region_overlap_from_mask(gm, atlas)
         entry = {"key": key, "name": atlas.name, "tier": atlas.tier, "df": df,
                  "coverage": coverage(p, atlas)}
         if key in ("schaefer", "arterial"):
@@ -699,8 +690,7 @@ def _subject_job(job: dict) -> dict:
                    threshold=o["threshold"], viewer=o["viewer"], thumbnail=o["thumbnail"],
                    anonymous=o["anonymous"])
     res["elapsed"] = _fmt_elapsed(time.time() - ts)
-    idx = np.flatnonzero(p.on_grid((tuple(job["ref_shape"]),
-                                    np.asarray(job["ref_affine"]))).mask.ravel())
+    idx = p.on_grid((tuple(job["ref_shape"]), np.asarray(job["ref_affine"]))).flat
     report_path = None
     if o["write"]:
         sub_dir = os.path.join(o["out_dir"], "subjects", name)

@@ -15,7 +15,27 @@ import tempfile
 
 import numpy as np
 
-__all__ = ["cache_dir", "cached_arrays", "clear"]
+__all__ = ["cache_dir", "cached_arrays", "clear", "once"]
+
+
+def once(build):
+    """Decorator: ``build()`` runs once per process, the first time the
+    function is called; every caller (on any thread) gets that same value.
+    Concurrent first callers wait for the one build. An exception is not
+    cached: the next call tries again."""
+    import functools
+    import threading
+    lock = threading.Lock()
+    box: list = []
+
+    @functools.wraps(build)
+    def get():
+        if not box:
+            with lock:
+                if not box:
+                    box.append(build())
+        return box[0]
+    return get
 
 
 def cache_dir() -> "str | None":

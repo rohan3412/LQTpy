@@ -59,7 +59,8 @@ def _w():
 
 
 C_BASE, R_BASE = (-40, 5, 15), (14, 12, 11)
-DRAWING = ("sparse_slices", "flat", "hollow", "holes", "strokes", "box")
+DRAWING = ("sparse_slices", "flat", "hollow", "holes", "strokes", "box", "comb", "blocky",
+           "partial_gaps")
 EXTRA = ("outside_brain", "edge_artifact", "specks", "strokes")
 
 
@@ -103,18 +104,24 @@ def clean_cases() -> "list[Case]":
     patch = S.sphere((-50, -20, 30), 14)
     ribbon = patch & np.isin(tl, (1, 2)) if tl.shape == patch.shape else patch
     cases.append(Case("clean cortical ribbon", ribbon))
-    # Jagged slice-by-slice drawing (outlines jump between slices).
+    # Jagged slice-by-slice drawing (outlines jump between slices): comb-like
+    # since QC rules 1.2 (the user's call: report it when it is true).
     m = np.zeros(S.MNI_SHAPE, bool)
     for z in range(0, 30):
         rx, ry = rng.uniform(8, 22), rng.uniform(8, 22)
         m |= (w[..., 2] == z) & (((w[..., 0] + 40) / rx) ** 2 + ((w[..., 1] - 5) / ry) ** 2 <= 1)
-    cases.append(Case("clean jagged slice-by-slice drawing", m))
+    jagged = Case("jagged slice-by-slice drawing (comb-like)", m)
+    cases.append(jagged)
     for grid in LAB_GRIDS:
         mm, aff = on_lab_grid(S.ellipsoid(C_BASE, R_BASE), grid)
         cases.append(Case(f"clean ellipsoid on {grid} grid", mm, aff))
     for c in cases:
         c.forbid = DRAWING + EXTRA + ("not_mni", "misregistered", "inverted")
         c.group = "clean"
+    # Its slices differ wildly, so some are partly drawn too.
+    jagged.expect = ("comb",)
+    jagged.forbid = tuple(f for f in jagged.forbid if f not in ("comb", "partial_gaps"))
+    jagged.group = "drawing"
     return cases
 
 

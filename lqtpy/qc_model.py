@@ -14,7 +14,9 @@ Problem   graded major, or a space/file failure
 
 The mask as a whole gets a **verdict** (usable / usable with caution / fix
 before use / unusable) and a **score** from 0 (unusable) to 100 (no
-findings), for ranking copies of the same lesion.
+findings), for ranking copies of the same lesion. Checks add up: several
+moderate or minor findings together (:data:`FIX_POINTS`) make a mask "fix
+before use", as one major finding does.
 
 The JSON shape (``QCResult.to_dict``) is versioned by :data:`QC_VERSION`,
 which changes only when QC rules or thresholds change. Key caches on it,
@@ -26,10 +28,10 @@ import json
 from dataclasses import asdict, dataclass, field
 
 __all__ = ["QC_VERSION", "Finding", "DrawingContext", "QCResult", "GRADE_BANDS", "CATEGORY",
-           "VERDICTS", "grade_of", "severity_for", "verdict_and_score"]
+           "VERDICTS", "FIX_POINTS", "grade_of", "severity_for", "verdict_and_score"]
 
 #: Changes whenever QC rules, thresholds or the JSON shape change.
-QC_VERSION = "1.1"
+QC_VERSION = "1.2"
 
 INFO, WARN, ERROR = "info", "warn", "error"
 GRADES = ("minor", "moderate", "major")
@@ -40,7 +42,8 @@ CATEGORY = {
     "header": "space",
     "input": "values", "values": "values",
     "sparse_slices": "drawing", "flat": "drawing", "hollow": "drawing", "holes": "drawing",
-    "strokes": "drawing", "box": "drawing",
+    "strokes": "drawing", "box": "drawing", "comb": "drawing", "blocky": "drawing",
+    "partial_gaps": "drawing",
     "outside_brain": "extra", "edge_artifact": "extra", "specks": "extra",
     "fragmentation": "plausibility", "plausibility": "plausibility",
 }
@@ -59,6 +62,10 @@ GRADE_BANDS = {
     "holes": ("missing_pct", (2.0, 10.0, 25.0)),
     "strokes": ("affected_pct", (0.5, 5.0, 15.0)),
     "box": ("affected_pct", (5.0, 25.0, 60.0)),
+    # comb-like / blocky: a Note by default, a Check when the outline clearly changes
+    "comb": ("comb_ratio", (2.5, 3.5, 1e9)),
+    "blocky": ("blocky_pct", (35.0, 65.0, 1e9)),
+    "partial_gaps": ("missing_pct", (0.0, 10.0, 25.0)),
     "outside_brain": ("outside_pct", (1.0, 5.0, 15.0)),
     "edge_artifact": ("affected_pct", (0.0, 5.0, 20.0)),
     "specks": ("n_specks", (4.0, 100.0, 1e9)),
@@ -67,6 +74,9 @@ GRADE_BANDS = {
 }
 
 VERDICTS = ("usable", "usable with caution", "fix before use", "unusable")
+#: Checks add up: 2 points per moderate and 1 per minor finding; this many
+#: points make a mask "fix before use" even without a major finding.
+FIX_POINTS = 4
 #: Findings that make a mask unusable outright (every number would be wrong).
 FATAL = {"not_mni", "inverted"}
 _PENALTY = {"major": 40, "moderate": 15, "minor": 5, None: 1}
@@ -224,14 +234,15 @@ class QCResult:
 
 
 def _jsonable(o):
-    try:
-        import numpy as np
-        if isinstance(o, np.generic):
-            return o.item()
-        if isinstance(o, np.ndarray):
-            return o.tolist()
-    except ImportError:
-        pass
+    """``json.dump`` default: numpy values to plain ones, sets to lists, the
+    rest to text."""
+    import numpy as np
+    if isinstance(o, np.generic):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, (set, tuple)):
+        return list(o)
     return str(o)
 
 
@@ -277,7 +288,8 @@ def verdict_and_score(findings: "list[Finding]") -> "tuple[str, int, str]":
     for f in findings:
         score -= _PENALTY.get(f.grade if f.severity != INFO else None, 1)
     score = max(1, min(100, score))
-    if any(f.severity == ERROR for f in findings):
+    points = sum({"moderate": 2, "minor": 1}.get(f.grade, 0) for f in findings if f.severity == WARN)
+    if any(f.severity == ERROR for f in findings) or points >= FIX_POINTS:
         v = "fix before use"
     elif any(f.grade == "moderate" for f in findings) or sum(f.grade == "minor" for f in findings) >= 3:
         v = "usable with caution"

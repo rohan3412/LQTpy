@@ -32,21 +32,55 @@ __all__ = ["PreparedLesion", "prepare", "GridMask"]
 class GridMask:
     """A lesion mask resampled onto one reference grid.
 
-    ``mask`` is a read-only boolean array with the reference grid's shape.
-    ``outside_fov_voxels`` counts lesion voxels (on the lesion's *own*
-    grid) whose centres fall outside the reference grid's field of view:
-    they can't appear in ``mask`` at all, and are reported rather than
-    dropped silently.
+    ``flat`` lists the lesion's voxels on the reference grid as sorted
+    C-order flat indices (what ``np.flatnonzero(mask)`` gives), so work on
+    the lesion costs time in proportion to the lesion, not the grid.
+    ``mask`` is the same as a read-only boolean array with the reference
+    grid's shape, built on first use. ``outside_fov_voxels`` counts lesion
+    voxels (on the lesion's *own* grid) whose centres fall outside the
+    reference grid's field of view: they can't appear in ``mask`` at all,
+    and are reported rather than dropped silently.
     """
 
-    __slots__ = ("mask", "n_voxels", "outside_fov_voxels", "outside_fov_fraction")
+    __slots__ = ("shape", "flat", "n_voxels", "outside_fov_voxels", "outside_fov_fraction", "_mask")
 
-    def __init__(self, mask, outside_fov_voxels, n_native):
-        mask.flags.writeable = False
-        self.mask = mask
-        self.n_voxels = int(np.count_nonzero(mask))
+    def __init__(self, shape, flat, outside_fov_voxels, n_native, mask=None):
+        flat.flags.writeable = False
+        self.shape = tuple(int(s) for s in shape)
+        self.flat = flat
+        self.n_voxels = int(flat.size)
         self.outside_fov_voxels = int(outside_fov_voxels)
         self.outside_fov_fraction = (outside_fov_voxels / n_native) if n_native else 0.0
+        self._mask = mask
+
+    @property
+    def mask(self) -> np.ndarray:
+        if self._mask is None:
+            m = np.zeros(self.shape, bool)
+            m.reshape(-1)[self.flat] = True
+            m.flags.writeable = False
+            self._mask = m
+        return self._mask
+
+    def ijk(self) -> np.ndarray:
+        """(N, 3) voxel indices of the lesion on the grid, in C order (what
+        ``np.argwhere(mask)`` gives)."""
+        return np.column_stack(np.unravel_index(self.flat, self.shape))
+
+    def take(self, volume: np.ndarray) -> np.ndarray:
+        """``volume[mask]`` for a C-contiguous volume on this grid."""
+        return volume.reshape(-1)[self.flat]
+
+
+def flat_indices(mask) -> np.ndarray:
+    """Sorted C-order flat indices of a boolean mask or a :class:`GridMask`."""
+    return mask.flat if isinstance(mask, GridMask) else np.flatnonzero(mask)
+
+
+def _nonzero(mask: np.ndarray):
+    """``np.nonzero`` for an N-D array, an order of magnitude faster on large
+    grids (``np.flatnonzero`` plus ``np.unravel_index``; same output)."""
+    return np.unravel_index(np.flatnonzero(mask), mask.shape)
 
 
 def _grid_key(shape, affine) -> tuple:
@@ -77,18 +111,21 @@ class PreparedLesion:
         Inclusive-exclusive voxel bounds of the lesion on its own grid.
     """
 
-    def __init__(self, *, img, mask, threshold, was_binary, n_nonfinite, name, source):
+    def __init__(self, *, mask, affine, threshold, was_binary, n_nonfinite, name, source,
+                 header=None, img=None, nonzero=None):
         mask.flags.writeable = False
-        self.img = img
+        self._img = img
+        self._header = header
         self.mask = mask
-        self.affine = np.asarray(img.affine, dtype=float)
+        self._img_affine = affine
+        self.affine = np.asarray(affine, dtype=float)
         self.shape = tuple(int(s) for s in mask.shape)
         self.threshold = float(threshold)
         self.was_binary = bool(was_binary)
         self.n_nonfinite = int(n_nonfinite)
         self.name = name
         self.source = source
-        nz = np.nonzero(mask)
+        nz = _nonzero(mask) if nonzero is None else nonzero
         self.n_voxels = int(nz[0].size)
         self._nonzero = tuple(a.astype(np.int32) for a in nz)
         self.bbox = (tuple(int(a.min()) for a in nz), tuple(int(a.max()) + 1 for a in nz))
@@ -102,6 +139,31 @@ class PreparedLesion:
         #: the input's values before thresholding: dtype, distinct values,
         #: integer or not, and (for fractional data) counts above 0.3/0.5/0.7.
         self.value_info: dict = {}
+
+    @property
+    def img(self):
+        """The binary (uint8) lesion as a NIfTI image, built on first use."""
+        if self._img is None:
+            with self._lock:
+                if self._img is None:
+                    img = nib.Nifti1Image(self.mask.astype(np.uint8), self._img_affine, self._header)
+                    img.set_data_dtype(np.uint8)
+                    if hasattr(img.header, "set_slope_inter"):
+                        img.header.set_slope_inter(1, 0)
+                    self._img = img
+        return self._img
+
+    def _derived(self, mask=None, *, affine=None, name="lesion", threshold=0.0, nonzero=None):
+        """A new lesion made from this one without re-reading or
+        re-thresholding a full image: a part of it (``mask`` on the same
+        grid), or the same mask placed by another ``affine`` (its mirror
+        image). Same result as :func:`prepare` on the uint8 image of that
+        mask, with no header."""
+        if mask is None:
+            mask, nonzero = self.mask, self._nonzero
+        aff = self.affine if affine is None else np.asarray(affine, float)
+        return PreparedLesion(mask=mask, affine=aff, threshold=threshold, was_binary=True,
+                              n_nonfinite=0, name=name, source=None, nonzero=nonzero)
 
     def __repr__(self) -> str:
         return (f"PreparedLesion(name={self.name!r}, n_voxels={self.n_voxels}, "
@@ -171,13 +233,27 @@ class PreparedLesion:
         same = (ref_shape == self.shape
                 and np.allclose(ref_affine, self.affine, atol=1e-3))
         if same:
-            return GridMask(self.mask.copy(), 0, self.n_voxels)
-        return GridMask(_nearest_on_grid(self.mask, self.affine, self.bbox,
-                                         ref_shape, ref_affine),
-                        self._outside_fov(ref_shape, ref_affine), self.n_voxels)
+            return GridMask(ref_shape, np.ravel_multi_index(self._nonzero, ref_shape), 0,
+                            self.n_voxels, mask=self.mask)
+        tlo, sub = _nearest_box(self.mask, self.affine, self.bbox, ref_shape, ref_affine)
+        if sub is None:
+            flat = np.zeros(0, np.intp)
+        else:
+            ijk = np.unravel_index(np.flatnonzero(sub), sub.shape)
+            flat = np.ravel_multi_index(tuple(a + o for a, o in zip(ijk, tlo)), ref_shape)
+        return GridMask(ref_shape, flat, self._outside_fov(ref_shape, ref_affine), self.n_voxels)
 
 
 def _nearest_on_grid(mask, src_affine, bbox, ref_shape, ref_affine) -> np.ndarray:
+    """:func:`_nearest_box`, placed in a full array of ``ref_shape``."""
+    out = np.zeros(tuple(int(s) for s in ref_shape), dtype=bool)
+    tlo, sub = _nearest_box(mask, src_affine, bbox, ref_shape, ref_affine)
+    if sub is not None:
+        out[tuple(slice(a, a + n) for a, n in zip(tlo, sub.shape))] = sub
+    return out
+
+
+def _nearest_box(mask, src_affine, bbox, ref_shape, ref_affine):
     """Nearest-neighbour resample of a boolean ``mask`` onto a reference grid.
 
     For each reference voxel the source coordinate is
@@ -191,11 +267,13 @@ def _nearest_on_grid(mask, src_affine, bbox, ref_shape, ref_affine) -> np.ndarra
     evaluated, and coordinates are always computed from *global* reference
     indices, so the result doesn't depend on that cropping. This is what
     makes resampling cost scale with lesion size instead of grid size.
+
+    Returns ``(origin, sub)``: the evaluated box of the reference grid and
+    its origin there, or ``(None, None)`` when the lesion can't reach it.
     """
     from scipy import linalg
 
     ref_shape = tuple(int(s) for s in ref_shape)
-    out = np.zeros(ref_shape, dtype=bool)
     M = linalg.inv(src_affine) @ ref_affine          # ref voxel -> src voxel
     Minv = linalg.inv(M)                             # src voxel -> ref voxel
     lo, hi = np.asarray(bbox[0], float), np.asarray(bbox[1], float) - 1
@@ -206,7 +284,7 @@ def _nearest_on_grid(mask, src_affine, bbox, ref_shape, ref_affine) -> np.ndarra
     tlo = np.maximum(np.floor(tvox.min(0)).astype(int) - 1, 0)
     thi = np.minimum(np.ceil(tvox.max(0)).astype(int) + 2, np.asarray(ref_shape))
     if not np.all(thi > tlo):
-        return out
+        return None, None
     ti, tj, tk = (np.arange(a, b, dtype=float) for a, b in zip(tlo, thi))
     src_shape = mask.shape
     idx = []
@@ -222,8 +300,7 @@ def _nearest_on_grid(mask, src_affine, bbox, ref_shape, ref_affine) -> np.ndarra
         idx.append(np.floor(c + 0.5).astype(np.int64))
     sub = np.zeros(valid.shape, dtype=bool)
     sub[valid] = mask[idx[0][valid], idx[1][valid], idx[2][valid]]
-    out[tlo[0]:thi[0], tlo[1]:thi[1], tlo[2]:thi[2]] = sub
-    return out
+    return tuple(int(v) for v in tlo), sub
 
 
 def _stem(src) -> str:
@@ -264,8 +341,13 @@ def prepare(lesion, threshold: float = 0.5, *, name: "str | None" = None) -> Pre
         was_binary = True
         value_info["values"] = [1]
     else:
-        n_nonzero = np.count_nonzero(data)
-        was_binary = bool(n_nonzero == np.count_nonzero(data == 1))
+        if data.dtype.kind in "ui" and data.size:
+            # Integer data is binary exactly when every value is 0 or 1: two
+            # reductions instead of counting through two full-size copies.
+            was_binary = bool(data.min() >= 0 and data.max() <= 1)
+        else:
+            was_binary = bool(np.count_nonzero(data) == np.count_nonzero(data == 1))
+        n_nonzero = 0 if was_binary else np.count_nonzero(data)
         if not was_binary and n_nonzero:
             nzv = data[data != 0]
             uniq = np.unique(nzv[:2_000_000])
@@ -277,20 +359,17 @@ def prepare(lesion, threshold: float = 0.5, *, name: "str | None" = None) -> Pre
                 # result depends on it.
                 value_info["n_above"] = {str(t): int(np.count_nonzero(nzv > t)) for t in (0.3, 0.5, 0.7)}
     label = name or _stem(lesion)
-    if not mask.any():
+    nz = _nonzero(mask)
+    if not nz[0].size:
         where = os.fspath(lesion) if isinstance(lesion, (str, os.PathLike)) else "<in-memory lesion>"
         vmax = float(np.max(data)) if data.size else 0.0
         raise InvalidLesionError(
             f"Lesion '{where}' is empty after thresholding at {threshold} "
             f"(max value in image = {vmax}).")
     header = img.header.copy() if getattr(img, "header", None) is not None else None
-    bin_img = nib.Nifti1Image(mask.astype(np.uint8), img.affine, header)
-    bin_img.set_data_dtype(np.uint8)
-    if hasattr(bin_img.header, "set_slope_inter"):
-        bin_img.header.set_slope_inter(1, 0)
-    prepared = PreparedLesion(img=bin_img, mask=mask, threshold=threshold,
+    prepared = PreparedLesion(mask=mask, affine=img.affine, header=header, threshold=threshold,
                               was_binary=was_binary, n_nonfinite=n_nonfinite,
-                              name=label, source=lesion)
+                              name=label, source=lesion, nonzero=nz)
     prepared.header_info = _header_info(img)
     prepared.value_info = value_info
     return prepared

@@ -163,9 +163,10 @@ millimetre).
 ### Quality checks
 
 `qc.check()` flags masks that would give misleading numbers, tuned for MNI-space masks where a
-warp has smeared the artefacts: drawn on some slices only (`sparse_slices`), a single slice
-(`flat`, including a lesion that is mostly one thin slab with other pieces attached), an
-unfilled outline (`hollow`), lines or sheets drawn by mistake (`strokes`), fragments on the
+warp has smeared the artefacts: drawn on some slices only (`sparse_slices`), slices drawn only
+partly (`partial_gaps`), a single slice (`flat`, including a lesion that is mostly one thin slab
+with other pieces attached), an unfilled outline (`hollow`), outlines that jump from slice to
+slice (`comb`, comb-like) or are copied over many slices (`blocky`), lines or sheets drawn by mistake (`strokes`), fragments on the
 image edge (`edge_artifact`), stray specks, volume outside the brain, a mask not in MNI space, header problems, and a left/right
 mismatch when the expected side is known. It also finds holes, rectangle-tool blocks,
 odd label values and probability maps, inverted masks, masks shifted out of the brain, masks
@@ -175,7 +176,8 @@ Nothing is changed unless you ask.
 Each finding is **graded by its extent**. It says how much ("Check, moderate: 14% of the lesion
 lies outside the brain") and **where** (a slice or a point, so a viewer can jump there). It
 also carries a fix hint. The mask gets a **verdict** (usable / usable with caution / fix before
-use / unusable) and a **score** for ranking copies. Other points:
+use / unusable) and a **score** for ranking copies; several Checks together add up to "fix
+before use". Other points:
 
 - Three tiers (`header`, `fast`, `full`).
 - An optional **drawing context** from a drawing tool (the slices actually drawn, the drawing

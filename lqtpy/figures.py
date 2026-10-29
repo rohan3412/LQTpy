@@ -34,6 +34,8 @@ import zlib
 import numpy as np
 from scipy import ndimage
 
+from ._diskcache import once
+
 __all__ = ["png_bytes", "png_uri", "glass_brain_svg", "slices_svg", "overlap_svg",
            "thumbnail_uri", "flat_map_svg", "aseg_svg", "viewer_data", "LESION_RGB"]
 
@@ -78,8 +80,6 @@ def _rgba_u8(rgb, alpha) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 # Template (tissue atlas, reoriented to RAS)
 # --------------------------------------------------------------------------- #
-_TPL = None
-_tpl_lock = threading.Lock()
 # Stylised T1 intensities per tissue label (0 = background).
 _INTENSITY = np.zeros(256, np.float32)
 _INTENSITY[[1, 2]] = 0.50      # cortex
@@ -91,34 +91,58 @@ _INTENSITY[12] = 0.74          # brainstem
 _INTENSITY[[13, 14]] = 0.22    # CSF
 
 
+@once
 def _template():
     """``(labels_ras, affine_ras, ornt)``: the tissue atlas in RAS order and
     the orientation transform from the atlas grid (for lesion masks)."""
-    global _TPL
-    if _TPL is None:
-        with _tpl_lock:
-            if _TPL is None:
-                import nibabel as nib
-                from .atlases import load_atlas
-                at = load_atlas("tissue")
-                aff = np.asarray(at.img.affine, float)
-                ornt = nib.orientations.io_orientation(aff)
-                lab = nib.orientations.apply_orientation(at.label_array(), ornt)
-                lab = np.ascontiguousarray(lab.astype(np.uint8))
-                lab.flags.writeable = False
-                aff_ras = aff @ nib.orientations.inv_ornt_aff(ornt, at.label_array().shape)
-                _TPL = (lab, aff_ras, ornt, at)
-    return _TPL
+    import nibabel as nib
+    from .atlases import load_atlas
+    at = load_atlas("tissue")
+    aff = np.asarray(at.img.affine, float)
+    ornt = nib.orientations.io_orientation(aff)
+    lab = nib.orientations.apply_orientation(at.label_array(), ornt)
+    lab = np.ascontiguousarray(lab.astype(np.uint8))
+    lab.flags.writeable = False
+    aff_ras = aff @ nib.orientations.inv_ornt_aff(ornt, at.label_array().shape)
+    return lab, aff_ras, ornt, at
 
 
 def _lesion_ras(lesion, threshold=0.5) -> np.ndarray:
-    """The lesion on the template grid, RAS order (bool)."""
-    import nibabel as nib
+    """(N, 3) voxel indices of the lesion on the template grid, in RAS order
+    (where ``nibabel.orientations.apply_orientation`` puts them), cached on
+    the prepared lesion."""
     from .prepared import prepare
-    lab, _, ornt, at = _template()
+    _, _, ornt, at = _template()
     p = prepare(lesion, threshold)
-    m = p.on_grid(at.img).mask
-    return np.asarray(nib.orientations.apply_orientation(m, ornt), bool)
+
+    def build():
+        gm = p.on_grid(at.img)
+        ijk = gm.ijk()
+        out = np.empty_like(ijk)
+        for k in range(3):
+            v = ijk[:, k]
+            out[:, int(ornt[k, 0])] = gm.shape[k] - 1 - v if ornt[k, 1] < 0 else v
+        out.flags.writeable = False
+        return out
+    return p.cached(("figures_ras",), build)
+
+
+def _plane(ijk, shape, axis: int, index: "int | None" = None) -> np.ndarray:
+    """The lesion seen along ``axis``: voxels per pixel summed through the
+    volume (``index=None``, a projection) or the slice at ``index`` (bool)."""
+    keep = [a for a in range(3) if a != axis]
+    pts = ijk if index is None else ijk[ijk[:, axis] == index]
+    n = shape[keep[0]] * shape[keep[1]]
+    cnt = np.bincount(pts[:, keep[0]] * shape[keep[1]] + pts[:, keep[1]], minlength=n)
+    cnt = cnt.reshape(shape[keep[0]], shape[keep[1]])
+    return cnt if index is None else cnt > 0
+
+
+def _pooled(ijk, step: int, shape) -> np.ndarray:
+    """Distinct voxel indices after max-pooling by ``step`` (a downsampled
+    voxel is set when any voxel it covers is), inside ``shape``."""
+    d = np.unique(ijk // step, axis=0) if step > 1 else ijk
+    return d[np.all(d < np.asarray(shape), axis=1)]
 
 
 def _to_display(plane: np.ndarray, flip_cols: bool = False) -> np.ndarray:
@@ -171,22 +195,37 @@ def _svg_panels(panels, *, label: str, gap: int = 14, extra: str = "", pad_right
 # --------------------------------------------------------------------------- #
 # Glass brain
 # --------------------------------------------------------------------------- #
-def _glass_panel(lab, les, axis, scale, flip_cols=False):
-    def proj(m):
-        return _to_display(m.any(axis=axis), flip_cols)
+_GLASS: dict = {}
 
-    brain = proj(lab > 0)
-    parts = [(proj(np.isin(lab, (7, 8, 9))), 0.75), (proj(np.isin(lab, (5, 6))), 0.5),
-             (proj(np.isin(lab, (10, 11, 12))), 0.55)]
-    cnt = _to_display(les.sum(axis=axis).astype(np.float32), flip_cols)
-    bz = _zoom(brain, scale) > 0.5
-    rgb = np.full(bz.shape + (3,), _LINE, np.float32)
-    alpha = np.where(bz, 0.10, 0.0).astype(np.float32)
-    for m, a in parts:
-        e = _edge(_zoom(m, scale) > 0.5)
-        alpha = np.where(e, np.maximum(alpha, a), alpha)
-    e = _edge(bz)
-    alpha = np.where(e, 1.0, alpha)
+
+def _glass_base(lab, axis, scale, flip_cols):
+    """The template part of a glass-brain panel (brain, ventricle, deep-grey
+    and hindbrain outlines): the same for every lesion, drawn once."""
+    key = (lab.shape, axis, scale, flip_cols)
+    if key not in _GLASS:
+        def proj(m):
+            return _to_display(m.any(axis=axis), flip_cols)
+
+        brain = proj(lab > 0)
+        parts = [(proj(np.isin(lab, (7, 8, 9))), 0.75), (proj(np.isin(lab, (5, 6))), 0.5),
+                 (proj(np.isin(lab, (10, 11, 12))), 0.55)]
+        bz = _zoom(brain, scale) > 0.5
+        rgb = np.full(bz.shape + (3,), _LINE, np.float32)
+        alpha = np.where(bz, 0.10, 0.0).astype(np.float32)
+        for m, a in parts:
+            e = _edge(_zoom(m, scale) > 0.5)
+            alpha = np.where(e, np.maximum(alpha, a), alpha)
+        e = _edge(bz)
+        alpha = np.where(e, 1.0, alpha)
+        rgb.flags.writeable = alpha.flags.writeable = False
+        _GLASS[key] = (rgb, alpha)
+    return _GLASS[key]
+
+
+def _glass_panel(lab, cnt, axis, scale, flip_cols=False):
+    """``cnt``: the lesion's voxels per pixel, projected along ``axis``."""
+    rgb, alpha = _glass_base(lab, axis, scale, flip_cols)
+    cnt = _to_display(cnt.astype(np.float32), flip_cols)
     if cnt.max() > 0:
         c = _zoom(cnt, scale)
         dens = c / max(float(c.max()), 1e-6)
@@ -205,7 +244,7 @@ def glass_brain_svg(lesion, *, threshold: float = 0.5, scale: float = 2.0) -> st
              (2, False, [("L", "R"), None])]
     panels = []
     for axis, flip, (lr, _) in views:
-        img = _glass_panel(lab, les, axis, scale, flip_cols=flip)
+        img = _glass_panel(lab, _plane(les, lab.shape, axis), axis, scale, flip_cols=flip)
         h, w = img.shape[:2]
         panels.append((png_uri(img), w, h, [(10, 18, lr[0], "start"), (w - 10, 18, lr[1], "end")]))
     return _svg_panels(panels, label="Glass-brain projections of the lesion: from the left, "
@@ -231,25 +270,20 @@ def _slice_panel(lab2d, les2d, scale):
     return _rgba_u8(rgb, alpha)
 
 
-def _crop_rows(img, keep_rows):
-    return img[keep_rows[0]:keep_rows[1]]
-
-
 def slices_svg(lesion, cut_mm=None, *, threshold: float = 0.5, scale: float = 2.0) -> str:
     """Sagittal, coronal and axial slices through ``cut_mm`` (default: the
     lesion's centre of mass), neurological convention."""
     lab, aff, _, _ = _template()
     les = _lesion_ras(lesion, threshold)
     if cut_mm is None:
-        ijk = np.argwhere(les)
-        c = ijk.mean(0) if len(ijk) else np.array(lab.shape) / 2
+        c = les.mean(0) if len(les) else np.array(lab.shape) / 2
         cut_mm = aff[:3, :3] @ c + aff[:3, 3]
     vox = np.round(np.linalg.inv(aff) @ np.append(np.asarray(cut_mm, float), 1))[:3].astype(int)
     vox = np.clip(vox, 0, np.array(lab.shape) - 1)
     x, y, z = (float(v) for v in cut_mm)
-    specs = [("x", x, lab[vox[0]], les[vox[0]], ("P", "A")),
-             ("y", y, lab[:, vox[1]], les[:, vox[1]], ("L", "R")),
-             ("z", z, lab[:, :, vox[2]], les[:, :, vox[2]], ("L", "R"))]
+    specs = [("x", x, lab[vox[0]], _plane(les, lab.shape, 0, vox[0]), ("P", "A")),
+             ("y", y, lab[:, vox[1]], _plane(les, lab.shape, 1, vox[1]), ("L", "R")),
+             ("z", z, lab[:, :, vox[2]], _plane(les, lab.shape, 2, vox[2]), ("L", "R"))]
     panels = []
     for name, val, l2, m2, lr in specs:
         img = _slice_panel(_to_display(l2), _to_display(m2), scale)
@@ -332,23 +366,12 @@ def overlap_svg(freq_img, n_subjects: int, *, n_cuts: int = 6, scale: float = 1.
 # --------------------------------------------------------------------------- #
 # Thumbnail
 # --------------------------------------------------------------------------- #
-def _maxpool(m: np.ndarray, step: int) -> np.ndarray:
-    """Downsample a boolean volume by ``step``, keeping any voxel set (small
-    lesions survive)."""
-    if step == 1:
-        return m
-    pad = [(0, (-s) % step) for s in m.shape]
-    mp = np.pad(m, pad)
-    sh = [s // step for s in mp.shape]
-    return mp.reshape(sh[0], step, sh[1], step, sh[2], step).any(axis=(1, 3, 5))
-
-
 def thumbnail_uri(lesion, *, threshold: float = 0.5) -> str:
     """A small axial projection (about 91 x 109 px) for group tables."""
     lab, _, _, _ = _template()
-    les = _maxpool(_lesion_ras(lesion, threshold), 2)
-    lab2 = lab[::2, ::2, ::2][:les.shape[0], :les.shape[1], :les.shape[2]]
-    return png_uri(_glass_panel(lab2, les[:lab2.shape[0], :lab2.shape[1], :lab2.shape[2]], 2, 1.0))
+    lab2 = _downsample(lab, 2)
+    les = _pooled(_lesion_ras(lesion, threshold), 2, lab2.shape)
+    return png_uri(_glass_panel(lab2, _plane(les, lab2.shape, 2), 2, 1.0))
 
 
 # --------------------------------------------------------------------------- #
@@ -358,7 +381,7 @@ _VIEWS = ("lateral", "medial", "inferior", "superior")
 _ROWS = ("right", "left")
 _GEOM: dict = {}
 _geom_lock = threading.Lock()
-#: Theme colours shared with the report (same values as ggseg_flat.THEMES).
+#: Theme colour ramps for region maps (light and dark report themes).
 THEMES = {
     "light": {"ramp": ["#fde5d6", "#f9b890", "#f08a55", "#d9612b", "#a8431a", "#72290d"]},
     "dark": {"ramp": ["#5a2c17", "#8a3d1c", "#c25224", "#eb6d35", "#f89a65", "#ffc9a3"]},
@@ -366,8 +389,8 @@ THEMES = {
 
 
 def _geometry(atlas_key: str) -> dict:
-    """ggseg flat-map polygons laid out in a 2 x 4 grid (the same layout as
-    :mod:`lqtpy.ggseg_flat`), read with the csv module (no pandas)."""
+    """ggseg flat-map polygons laid out in a 2 x 4 grid (hemispheres x
+    views), read with the csv module (no pandas)."""
     g = _GEOM.get(atlas_key)
     if g is not None:
         return g
@@ -467,6 +490,22 @@ def _poly_d(p: np.ndarray, tol: float = 2.0) -> str:
     return "M" + "L".join(f"{a:g},{b:g}" for a, b in q) + "Z"
 
 
+_PATHS: dict = {}
+
+
+def _map_paths(atlas_key, layout, s, padl, padt) -> "dict[str, str]":
+    """Region key -> SVG path data of a flat map: fixed geometry, built once."""
+    key = (atlas_key, s, padl, padt)
+    if key not in _PATHS:
+        x0, y1 = layout["xlim"][0], layout["ylim"][1]
+        by_key: "dict[str, list]" = {}
+        for k, xy in layout["polys"]:
+            by_key.setdefault(k, []).append(
+                np.column_stack([(xy[:, 0] - x0) * s + padl, (y1 - xy[:, 1]) * s + padt]))
+        _PATHS[key] = {k: "".join(_poly_d(p) for p in polys) for k, polys in by_key.items()}
+    return _PATHS[key]
+
+
 def flat_map_svg(atlas_key: str, values: dict, *, labels: "dict | None" = None,
                  vmax: "float | None" = None, label: str = "Percent damaged",
                  uid: str = "fm") -> "str | None":
@@ -488,15 +527,8 @@ def flat_map_svg(atlas_key: str, values: dict, *, labels: "dict | None" = None,
     W, Hmap = 1000 + padl, (y1 - y0) * s
     H = Hmap + padt + 34
 
-    def tx(xy):
-        return np.column_stack([(xy[:, 0] - x0) * s + padl, (y1 - xy[:, 1]) * s + padt])
-
-    by_key: "dict[str, list]" = {}
-    for key, xy in layout["polys"]:
-        by_key.setdefault(key, []).append(tx(xy))
     paths = []
-    for key, polys in by_key.items():
-        d = "".join(_poly_d(p) for p in polys)
+    for key, d in _map_paths(atlas_key, layout, s, padl, padt).items():
         name, hl = labels.get(key, (key.replace("_", " "), None))
         v = values.get(key)
         title = f"{name}: {v:.1f}%" if v is not None else name
@@ -603,13 +635,12 @@ def viewer_data(lesion, *, threshold: float = 0.5, step: int = 2) -> "dict | Non
         rgba = _rgba_u8(np.repeat(shade[..., None], 3, axis=-1), np.clip(ndimage.gaussian_filter(a, 0.5) * 1.2, 0, 1))
         _SPRITES[key] = png_uri(_sprite(rgba))
     lab2 = _downsample(lab, step)
-    l2 = _maxpool(les, step)[:lab2.shape[0], :lab2.shape[1], :lab2.shape[2]]
-    ov = np.zeros(l2.shape + (4,), np.uint8)
-    ov[l2] = [245, 121, 58, 255]
-    shape = l2.shape
+    ijk = _pooled(les, step, lab2.shape)
+    shape = lab2.shape
+    ov = np.zeros(shape + (4,), np.uint8)
+    ov[tuple(ijk.T)] = [245, 121, 58, 255]
     aff2 = aff.copy()
     aff2[:3, :3] = aff[:3, :3] * step
-    ijk = np.argwhere(l2)
     c = np.round(ijk.mean(0)).astype(int) if len(ijk) else np.array(shape) // 2
     params = {"nbSlice": {"X": shape[0], "Y": shape[1], "Z": shape[2]},
               "overlay": {"nbSlice": {"X": shape[0], "Y": shape[1], "Z": shape[2]}, "opacity": 0.8},

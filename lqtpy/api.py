@@ -3,7 +3,7 @@
 This module is what a FastAPI (or any other) web handler calls in-process,
 on a threadpool, to get numbers back -- never plots, never an HTML report.
 It **never imports** ``matplotlib``, ``nilearn``, ``pandas``, or lqtpy's own
-``plotting``/``report``/``ggseg_flat`` modules on any of its normal
+``plotting``/``report``/``figures`` modules on any of its normal
 (implemented) code paths, so calling it never pulls those into
 ``sys.modules``. Every function returns plain records (``list[dict]`` /
 ``dict``) -- see ``tests/test_api.py`` for a subprocess test that checks
@@ -67,7 +67,7 @@ def _overlap(lesion, atlas_key, threshold):
     atlas = load_atlas(atlas_key)
     p = prepare(lesion, threshold)
     gm = p.on_grid(atlas.img)
-    return p, atlas, _region_overlap_from_mask(gm.mask, atlas), gm.n_voxels
+    return p, atlas, _region_overlap_from_mask(gm, atlas), gm.n_voxels
 
 
 def lesion_stats(lesion, *, threshold: float = 0.5) -> dict:
@@ -229,8 +229,7 @@ def tract_disconnection(lesion, *, threshold: float = 0.5,
     else:
         index = _datasets._load_discon_index()
 
-    mask = p.on_grid((tuple(index["shape"]), np.asarray(index["affine"]))).mask
-    lesion_voxel_keys = np.flatnonzero(mask.ravel())
+    lesion_voxel_keys = p.on_grid((tuple(index["shape"]), np.asarray(index["affine"]))).flat
 
     streamline_ids = _di.gather_streamline_ids(lesion_voxel_keys, index)
     tract_ids_hit = index["streamline_tract"][streamline_ids]

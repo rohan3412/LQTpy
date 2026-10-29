@@ -222,16 +222,19 @@ up front.
 Call this once from FastAPI startup so the first request that needs an
 atlas doesn&#x27;t pay the (one-time) load cost. Defaults to every *core*
 atlas plus host-registered ones (plugin atlases load on first use, since
-some fetch data). Also preloads the tract proxy index, the QC brain mask,
-the tissue distance maps, the border-zone map, the key-structure
-distance maps,
+some fetch data). Also preloads the tract proxy index, the QC brain mask
+and outside-the-brain depth map, the tissue distance maps, the
+border-zone map, the key-structure distance maps,
 and, if one has been built locally, the per-tract disconnection index --
-a no-op, not an error, when it hasn&#x27;t.</div></div><h2 id="lqtpy.qc">lqtpy.qc</h2><p class="muted" style="white-space:pre-wrap">Quality control for drawn lesion masks.</p><div class="fn" id="lqtpy.qc.check"><h3>check(lesion, *, threshold: &#x27;float&#x27; = 0.5, expected_side: &quot;&#x27;str | None&#x27;&quot; = None, mni: &#x27;bool&#x27; = True, **options) -&gt; &quot;&#x27;list[Flag]&#x27;&quot;</h3><div class="doc">Run every QC check; returns flags sorted by severity (errors first).
+a no-op, not an error, when it hasn&#x27;t.</div></div><h2 id="lqtpy.qc">lqtpy.qc</h2><p class="muted" style="white-space:pre-wrap">Quality control for drawn lesion masks.</p><div class="fn" id="lqtpy.qc.check"><h3>check(lesion, *, threshold: &#x27;float&#x27; = 0.5, expected_side: &quot;&#x27;str | None&#x27;&quot; = None, mni: &#x27;bool&#x27; = True, context=None, tier: &#x27;str&#x27; = &#x27;full&#x27;, **options) -&gt; &quot;&#x27;list[Finding]&#x27;&quot;</h3><div class="doc">Run every QC check; returns graded findings, worst first.
 
 ``lesion``: anything :func:`lqtpy.prepare` accepts. ``expected_side``:
 &quot;left&quot;/&quot;right&quot; if the caller knows the clinical side. ``mni=False``
 skips the brain-mask checks (for masks not meant to be in MNI space).
-``options`` override :data:`DEFAULTS`.</div></div><div class="fn" id="lqtpy.qc.clusters"><h3>clusters(lesion, *, merge_gaps: &#x27;bool&#x27; = True) -&gt; &#x27;dict&#x27;</h3><div class="doc">Lesion clusters: connected components, with gap-drawn slabs merged.
+``context``: a :class:`~lqtpy.qc_model.DrawingContext` (or its dict/JSON
+form) from a drawing tool. ``tier``: ``&quot;fast&quot;`` or ``&quot;full&quot;``.
+``options`` override :data:`DEFAULTS`. :func:`assess` returns the same
+findings plus the mask&#x27;s verdict and score.</div></div><div class="fn" id="lqtpy.qc.clusters"><h3>clusters(lesion, *, merge_gaps: &#x27;bool&#x27; = True) -&gt; &#x27;dict&#x27;</h3><div class="doc">Lesion clusters: connected components, with gap-drawn slabs merged.
 
 Returns ``{&quot;labels&quot;, &quot;offset&quot;, &quot;sizes&quot;, &quot;merged_from&quot;, &quot;gap_plane&quot;}``:
 ``labels`` is an int32 array over the lesion&#x27;s padded bounding box
@@ -239,7 +242,7 @@ Returns ``{&quot;labels&quot;, &quot;offset&quot;, &quot;sizes&quot;, &quot;merg
 joined into cluster ``i + 1``. Merging only happens when
 :func:`gap_evidence` finds a sparse-slice pattern and ``merge_gaps`` is
 true; then components within ``gap_max_mm`` of each other along the gap
-axis whose in-plane footprints overlap are joined.</div></div><div class="fn" id="lqtpy.qc.repair_gaps"><h3>repair_gaps(lesion, *, axis: &quot;&#x27;int | None&#x27;&quot; = None, max_gap_mm: &quot;&#x27;float | None&#x27;&quot; = None, threshold: &#x27;float&#x27; = 0.5)</h3><div class="doc">Fill sparse-slice gaps by shape-based interpolation. Opt-in only.
+axis whose in-plane footprints overlap are joined.</div></div><div class="fn" id="lqtpy.qc.repair_gaps"><h3>repair_gaps(lesion, *, axis: &quot;&#x27;int | None&#x27;&quot; = None, max_gap_mm: &quot;&#x27;float | None&#x27;&quot; = None, threshold: &#x27;float&#x27; = 0.5, slices: &quot;&#x27;list[int] | None&#x27;&quot; = None)</h3><div class="doc">Fill sparse-slice gaps by shape-based interpolation. Opt-in only.
 
 Along the gap axis (from :func:`gap_evidence`, or ``axis`` = 0/1/2 on
 the lesion grid), the core slice of each drawn slab (a local maximum of
@@ -249,16 +252,26 @@ cores are filled by interpolating the cores&#x27; signed distance maps
 result is a superset of the input). The lesion&#x27;s outermost tips beyond
 the first and last drawn slices are unknown and left alone.
 
+``slices`` (slice indices on the lesion grid along ``axis``) fills only
+those slices instead, each run from the nearest drawn slice on either
+side: for a slice or two forgotten inside an otherwise complete drawing,
+where the slab-core method would also reshape the drawn slices between
+a lumpy lesion&#x27;s bulges. With ``axis=None`` this is chosen automatically
+from the gap evidence (:func:`gap_slices_only`).
+
 Returns ``(repaired_img, report)``; ``report`` says which plane was
 used, how many slices were interpolated and how much was added. When no
-gaps are found it returns an unchanged copy and says so.</div></div><div class="fn" id="lqtpy.qc.clean"><h3>clean(lesion, *, specks: &#x27;bool&#x27; = True, edge: &#x27;bool&#x27; = True, threshold: &#x27;float&#x27; = 0.5, **options)</h3><div class="doc">Remove image-edge artefacts and/or specks. Opt-in only.
+gaps are found it returns an unchanged copy and says so.</div></div><div class="fn" id="lqtpy.qc.clean"><h3>clean(lesion, *, specks: &#x27;bool&#x27; = True, edge: &#x27;bool&#x27; = True, strokes: &#x27;bool&#x27; = False, outside: &#x27;bool&#x27; = False, threshold: &#x27;float&#x27; = 0.5, **options)</h3><div class="doc">Remove image-edge artefacts, specks, (``strokes=True``) thin strokes
+and (``outside=True``) voxels beyond the brain edge (past the
+``outside_rim_mm`` tolerance, MNI masks only). Opt-in only.
 
 Returns ``(clean_img, report)`` with a *new* binary image; the input is
 never modified. ``report`` lists what was removed.</div></div><div class="fn" id="lqtpy.qc.check_folder"><h3>check_folder(folder, *, threshold: &#x27;float&#x27; = 0.5, recursive: &#x27;bool&#x27; = False, expected_sides: &quot;&#x27;dict | None&#x27;&quot; = None) -&gt; &quot;&#x27;list[dict]&#x27;&quot;</h3><div class="doc">Run :func:`check` on every lesion file in ``folder``.
 
 One record per file: ``file`` (path), ``name``, ``worst`` (ok / info /
 warn / error), ``flags`` (list of flag dicts), ``volume_mm3`` and
-``error`` (a message when the file couldn&#x27;t be read, else None).
+``error`` (a message when the file couldn&#x27;t be read, else None),
+``verdict`` and ``score`` (see :class:`QCResult`).
 ``expected_sides`` maps names to &quot;left&quot;/&quot;right&quot; for the flip check.</div></div><div class="fn" id="lqtpy.qc.clean_folder"><h3>clean_folder(src, dst, *, specks: &#x27;bool&#x27; = True, edge: &#x27;bool&#x27; = True, threshold: &#x27;float&#x27; = 0.5, only_flagged: &#x27;bool&#x27; = True) -&gt; &quot;&#x27;list[dict]&#x27;&quot;</h3><div class="doc">Write cleaned copies (:func:`clean`) of every lesion file in ``src``
 into ``dst``. Never overwrites: ``dst`` must differ from ``src``, and a
 file that already exists in ``dst`` is skipped. With ``only_flagged``

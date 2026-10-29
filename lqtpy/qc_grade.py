@@ -68,12 +68,12 @@ def _world_to_ijk(p, mm) -> "list[float]":
 
 def _component_centres(p, ids) -> "dict[int, list[float]]":
     """Voxel-space centres (lesion grid) of morphometry components."""
-    from .morphometry import components
-    labels, lo, _ = components(p)
+    from .morphometry import components, label_centres
+    labels, lo, sizes = components(p)
     if not ids:
         return {}
-    c = ndimage.center_of_mass(np.ones(labels.shape), labels, index=list(ids))
-    return {i: [float(v) + float(lo[k]) for k, v in enumerate(cc)] for i, cc in zip(ids, c)}
+    c = label_centres(labels, len(sizes))
+    return {i: [float(v) + float(lo[k]) for k, v in enumerate(c[i - 1])] for i in ids}
 
 
 # --------------------------------------------------------------------------- #
@@ -305,9 +305,9 @@ def detect_plausibility(p, opts, mni) -> "list[Finding]":
 def _crosses_midline(p) -> bool:
     """True when one connected piece spans both sides (brainstem, corpus
     callosum lesions are naturally symmetric)."""
-    from .morphometry import components
+    from .morphometry import component_boxes, components, part_voxels
     labels, lo, sizes = components(p)
-    ijk = np.argwhere(labels == 1) + lo
+    ijk = part_voxels(labels, component_boxes(p), 1, lo)
     x = ijk @ p.affine[0, :3] + p.affine[0, 3]
     return bool((x < -2).any() and (x > 2).any())
 
@@ -415,6 +415,33 @@ def _hollow_extent(p, f, opts) -> None:
     f.fix = {"call": "qc.fix", "ids": ["hollow"]}
 
 
+def _style_extent(p, f) -> None:
+    """Comb-like, blocky and partly drawn slices: extent, and where to look
+    (across the drawing plane, where the steps show; or the partly drawn
+    slices themselves)."""
+    ev = f.evidence
+    ax = ev["axis"]
+    c = p.voxel_coords().mean(0)
+    span = np.asarray(p.bbox[1]) - np.asarray(p.bbox[0])
+    across = max((a for a in range(3) if a != ax), key=lambda a: span[a])
+    view = loc_slice(p, across, int(round(c[across])))
+    if f.id == "comb":
+        f.extent = {"comb_ratio": ev["ratio"], "jagged_pct": ev["jagged_pct"], "plane": ev["plane"]}
+        f.affected_pct = ev["jagged_pct"]
+        f.locations = [view]
+    elif f.id == "blocky":
+        f.extent = {"blocky_pct": ev["blocky_pct"], "block_mm": ev["block_mm"],
+                    "longest_mm": ev["longest_mm"], "n_blocks": ev["n_blocks"], "plane": ev["plane"]}
+        f.affected_pct = ev["blocky_pct"]
+        f.locations = [view]
+    else:
+        f.extent = {"missing_pct": ev["missing_pct"], "n_slices": len(ev["slices"]),
+                    "worst_share_pct": round(100 * ev["worst_share"], 1), "plane": ev["plane"]}
+        f.affected_pct = ev["missing_pct"]
+        f.locations = [loc_slice(p, ax, k) for k in ev["slices"][:20]]
+        f.fix = {"call": "qc.fix", "ids": ["partial_gaps"]}
+
+
 def _components_extent(p, f, comp_ids, what: str) -> None:
     from .morphometry import components
     _, _, sizes = components(p)
@@ -444,7 +471,6 @@ def grade(p, raw: "list[Finding]", opts: dict, tier: str, ctx, mni: bool) -> "li
         # the image edge, box-shaped) is a consequence, not a separate problem.
         raw = [f for f in raw if f.id in ("header", "input")] + inv
     findings = list(raw)
-    ids = {f.id for f in findings}
     ctx_gap = detect_context_gaps(p, ctx)
     if ctx_gap is not None:
         findings = [f for f in findings if f.id != "sparse_slices"] + [ctx_gap]
@@ -455,7 +481,10 @@ def grade(p, raw: "list[Finding]", opts: dict, tier: str, ctx, mni: bool) -> "li
                for f in findings):
         findings += detect_holes(p, opts, mni)
     if not inv:
-        findings += detect_boxes(p, opts)
+        boxes = detect_boxes(p, opts)
+        if boxes:   # a rectangle-tool box is blocky by nature: one finding, not two
+            findings = [f for f in findings if f.id != "blocky"]
+        findings += boxes
         findings += detect_fragmentation(p, opts)
     if tier == "full" and not any(f.id in ("inverted", "not_mni") for f in findings):
         findings += detect_plausibility(p, opts, mni)
@@ -516,6 +545,8 @@ def grade(p, raw: "list[Finding]", opts: dict, tier: str, ctx, mni: bool) -> "li
             mm = f.evidence.get("max_disagreement_mm")
             if mm is not None:
                 f.extent = {"qform_sform_mm": mm}
+        elif f.id in ("comb", "blocky", "partial_gaps"):
+            _style_extent(p, f)
         # -- grade and severity ---------------------------------------------
         if f.id in FATAL:
             f.grade, f.severity = "major", ERROR
@@ -541,6 +572,8 @@ def grade(p, raw: "list[Finding]", opts: dict, tier: str, ctx, mni: bool) -> "li
                 g = g or "minor"
             if f.id == "outside_brain" and f.evidence.get("far_mm3"):
                 g = g or "minor"        # far from the brain: stray marks, however small
+            if f.id == "blocky" and g == "moderate" and f.extent.get("block_mm", 0.0) < 10.0:
+                g = "minor"     # a staircase of thin blocks coarsens the outline less
             f.grade = g
             f.severity = severity_for(g)
         out.append(f)

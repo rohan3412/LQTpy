@@ -27,13 +27,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-import nibabel as nib
 
 from .atlases import load_atlas
 from .overlap import coverage as _coverage
 from .overlap import region_overlap_from_mask
 from . import _format as _fmt
-from .prepared import prepare
+from .prepared import flat_indices, prepare
 
 __all__ = ["facts", "describe", "Description", "PROFILES"]
 
@@ -149,9 +148,10 @@ def _hierarchy(mask, atlas, lesion_total: int, grid_affine, wm=None) -> dict:
         })
     # Unlabelled voxels split by hemisphere (world x of the grid voxels).
     labels = atlas.label_array()
-    known = np.zeros(int(labels.max()) + 1, bool)
+    flat = flat_indices(mask)
+    known = np.zeros(len(atlas.region_voxels()), bool)
     known[[k for k in by_id if 0 <= k < known.size]] = True
-    lab_at = labels[mask]
+    lab_at = labels.reshape(-1)[flat]
     unl = ~known[np.clip(lab_at, 0, None)] | (lab_at <= 0)
     wm_ok = (wm is not None and wm.label_array().shape == labels.shape
              and np.allclose(np.asarray(wm.img.affine, float), grid_affine, atol=1e-3))
@@ -160,8 +160,8 @@ def _hierarchy(mask, atlas, lesion_total: int, grid_affine, wm=None) -> dict:
         wrecs = region_overlap_from_mask(mask, wm)
         wm_damage = {r["LabelID"]: r["PercentDamage"] for r in wrecs}
     if unl.any():
-        ijk = np.argwhere(mask)[unl]
-        wl = wm.label_array()[mask][unl] if wm_ok else np.zeros(len(ijk), int)
+        ijk = np.column_stack(np.unravel_index(flat[unl], labels.shape))
+        wl = wm.label_array().reshape(-1)[flat[unl]] if wm_ok else np.zeros(len(ijk), int)
         x = ijk @ grid_affine[0, :3] + grid_affine[0, 3]
         for side, sel in (("L", x < -1e-3), ("R", x > 1e-3), ("Midline", np.abs(x) <= 1e-3)):
             n = int(sel.sum())
@@ -233,7 +233,7 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
     vox_mm3 = float(abs(np.linalg.det(p.affine[:3, :3])))
 
     wm_at = load_atlas(white_matter) if white_matter else None
-    whole = _hierarchy(gm.mask, at, gm.n_voxels, np.asarray(at.img.affine, float), wm_at)
+    whole = _hierarchy(gm, at, gm.n_voxels, np.asarray(at.img.affine, float), wm_at)
     out = {
         "profile": profile,
         "atlas": at.key,
@@ -254,7 +254,7 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
         from . import tissue as _tissue
         loc = _tissue.locate(p)
         out["tissue"] = {k: loc[k] for k in ("composition", "class", "counts", "contact_mm")}
-        ut = _unlabelled_tissue(gm.mask, at, wm_at, by_side=True)
+        ut = _unlabelled_tissue(gm, at, wm_at, by_side=True)
         out["unlabelled_tissue"] = ut.get("all", {})
         out["unlabelled_tissue_by_side"] = {k: v for k, v in ut.items() if k != "all"}
 
@@ -263,8 +263,9 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
     sizes = cl["sizes"]
     total = int(sizes.sum()) if len(sizes) else 0
     from scipy import ndimage as _nd
-    cents = (_nd.center_of_mass(np.ones(cl["labels"].shape), cl["labels"],
-                                index=np.arange(1, len(sizes) + 1)) if len(sizes) else [])
+    from .morphometry import label_centres, part_voxels
+    cents = label_centres(cl["labels"], len(sizes)) if len(sizes) else []
+    boxes = _nd.find_objects(cl["labels"]) if len(sizes) > 1 else []
     clusters = []
     for i, n in enumerate(sizes):
         share = 100.0 * int(n) / total if total else 0.0
@@ -281,14 +282,12 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
                           "dist_cortex_mm": lp["dist_cortex_mm"],
                           "max_axial_mm": lp["max_axial_mm"]})
         if i < prof.max_clusters and (share >= prof.min_cluster_share or i == 0) and len(sizes) > 1:
+            ijk = part_voxels(cl["labels"], boxes, i + 1, cl["offset"])
             cmask = np.zeros(p.shape, bool)
-            sub = cl["labels"] == i + 1
-            lo = cl["offset"]
-            cmask[lo[0]:lo[0] + sub.shape[0], lo[1]:lo[1] + sub.shape[1],
-                  lo[2]:lo[2] + sub.shape[2]] = sub
-            cp = prepare(nib.Nifti1Image(cmask.astype(np.uint8), p.affine), threshold=0.0)
+            cmask[tuple(ijk.T)] = True
+            cp = p._derived(cmask, nonzero=tuple(ijk.T))
             cgm = cp.on_grid(at.img)
-            entry["hemispheres"] = _hierarchy(cgm.mask, at, cgm.n_voxels,
+            entry["hemispheres"] = _hierarchy(cgm, at, cgm.n_voxels,
                                               np.asarray(at.img.affine, float), wm_at)["hemispheres"]
             if territories:
                 entry["territories"] = _territories(cp, territories)
@@ -331,7 +330,7 @@ def facts(lesion, *, atlas: str = "dk", threshold: float = 0.5, profile: str = "
             from .overlap import network_rollup
             sch = load_atlas("schaefer")
             sgm = p.on_grid(sch.img)
-            recs = region_overlap_from_mask(sgm.mask, sch)
+            recs = region_overlap_from_mask(sgm, sch)
             out["networks"] = network_rollup(recs, sch, lesion_total=sgm.n_voxels)
         except Exception:
             out["networks"] = []
@@ -361,23 +360,24 @@ def _unlabelled_tissue(mask, atlas, wm_atlas, by_side: bool = False) -> dict:
     if ts.label_array().shape != lab.shape or not np.allclose(
             np.asarray(ts.img.affine, float), grid, atol=1e-3):
         return {}
-    total = int(np.count_nonzero(mask))
+    flat = flat_indices(mask)
+    total = int(flat.size)
     if not total:
         return {}
-    lab_m = lab[mask]
+    lab_m = lab.reshape(-1)[flat]
     known = np.isin(lab_m, list(atlas.labels)) & (lab_m > 0)
     if wm_atlas is not None and wm_atlas.label_array().shape == lab.shape:
-        wl = wm_atlas.label_array()[mask]
+        wl = wm_atlas.label_array().reshape(-1)[flat]
         known |= np.isin(wl, list(wm_atlas.labels)) & (wl > 0)
     if known.all():
         return {} if not by_side else {"all": {}}
-    cls = _tissue._LUT[ts.label_array()[mask][~known]]
+    cls = _tissue._LUT[ts.label_array().reshape(-1)[flat[~known]]]
     counts = np.bincount(cls, minlength=len(_tissue._KEYS))
     whole = {k: round(100.0 * int(c) / total, 1) for k, c in zip(_tissue._KEYS, counts) if c}
     if not by_side:
         return whole
     out = {"all": whole}
-    x = np.argwhere(mask)[~known] @ grid[0, :3] + grid[0, 3]
+    x = np.column_stack(np.unravel_index(flat[~known], lab.shape)) @ grid[0, :3] + grid[0, 3]
     for side, sel in (("left", x < -1e-3), ("right", x > 1e-3), ("midline", np.abs(x) <= 1e-3)):
         if sel.any():
             c = np.bincount(cls[sel], minlength=len(_tissue._KEYS))
@@ -398,7 +398,7 @@ def _territories(p, key: str) -> "list[dict]":
     total = gm.n_voxels
     if not total:
         return []
-    recs = region_overlap_from_mask(gm.mask, at)
+    recs = region_overlap_from_mask(gm, at)
     groups: "dict[tuple, dict]" = {}
     for r in recs:
         m = at.labels[r["LabelID"]]

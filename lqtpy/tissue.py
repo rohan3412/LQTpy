@@ -32,11 +32,11 @@ All of this is core tier. The only one-time cost is two distance maps, about
 """
 from __future__ import annotations
 
-import threading
 
 import numpy as np
 from scipy import ndimage
 
+from ._diskcache import cached_arrays, once
 from .prepared import prepare
 
 __all__ = ["composition", "locate", "CLASSES", "TISSUES"]
@@ -64,39 +64,30 @@ _KEYS = ["outside"] + list(TISSUES)
 for _i, _k in enumerate(_KEYS[1:], start=1):
     _LUT[list(TISSUES[_k])] = _i
 
-_DIST = None
-_dist_lock = threading.Lock()
-
-
 def _atlas():
     from .atlases import load_atlas
     return load_atlas("tissue")
 
 
+@once
 def distance_maps():
     """``(to_cortex, to_lateral_ventricle, affine)``: distance in mm from
     every voxel to the nearest cortex / lateral-ventricle voxel of the
     template, stored as uint8 in quarter-millimetres (capped at 63.75 mm).
     Built once, lazily, and cached read-only."""
-    global _DIST
-    if _DIST is None:
-        with _dist_lock:
-            if _DIST is None:
-                from ._diskcache import cached_arrays
-                at = _atlas()
-                lab = at.label_array()
-                aff = np.asarray(at.img.affine, float)
-                zooms = np.linalg.norm(aff[:3, :3], axis=0)
+    at = _atlas()
+    lab = at.label_array()
+    aff = np.asarray(at.img.affine, float)
+    zooms = np.linalg.norm(aff[:3, :3], axis=0)
 
-                def build():
-                    out = {}
-                    for k, ids in (("cortex", (1, 2)), ("ventricle", (7, 8))):
-                        d = ndimage.distance_transform_edt(~np.isin(lab, ids), sampling=zooms)
-                        out[k] = np.minimum(np.round(d * 4), 255).astype(np.uint8)
-                    return out
-                maps = cached_arrays("tissue_distance", build)
-                _DIST = (maps["cortex"], maps["ventricle"], aff)
-    return _DIST
+    def build():
+        out = {}
+        for k, ids in (("cortex", (1, 2)), ("ventricle", (7, 8))):
+            d = ndimage.distance_transform_edt(~np.isin(lab, ids), sampling=zooms)
+            out[k] = np.minimum(np.round(d * 4), 255).astype(np.uint8)
+        return out
+    maps = cached_arrays("tissue_distance", build)
+    return maps["cortex"], maps["ventricle"], aff
 
 
 def _sample(p, ijk_lesion: np.ndarray):
@@ -196,12 +187,13 @@ def _locate(p, contact_mm, merge_gaps) -> dict:
     cl = _qc.clusters(p, merge_gaps=merge_gaps)
     labels, off = cl["labels"], np.asarray(cl["offset"])
     vox_mm3 = float(abs(np.linalg.det(p.affine[:3, :3])))
+    from .morphometry import part_voxels
     objs = ndimage.find_objects(labels)
     for i, sl in enumerate(objs):
         if sl is None:
             continue
-        sub = labels[sl] == i + 1
-        ijk = np.argwhere(sub) + off + np.array([s.start for s in sl])
+        ijk = part_voxels(labels, objs, i + 1, off)
+        n_vox = len(ijk)
         cls, flat = _sample(p, ijk.astype(float))
         sh = _shares(cls)
         ok = flat >= 0
@@ -215,7 +207,7 @@ def _locate(p, contact_mm, merge_gaps) -> dict:
         c = _part_class(sh, d_v, d_c, contact_mm)
         out["counts"][c] += 1
         out["parts"].append({
-            "id": i + 1, "voxels": int(sub.sum()), "volume_mm3": round(int(sub.sum()) * vox_mm3, 1),
+            "id": i + 1, "voxels": n_vox, "volume_mm3": round(n_vox * vox_mm3, 1),
             "class": c, "tissue_class": _summary_class(sh), "composition": sh,
             "dist_ventricle_mm": round(d_v, 2), "dist_cortex_mm": round(d_c, 2),
             "reaches_ventricle": d_v <= contact_mm, "reaches_cortex": d_c <= contact_mm,

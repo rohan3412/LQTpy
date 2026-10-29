@@ -64,7 +64,7 @@ The **verdict** sums up the mask:
 |---|---|
 | usable | no Check or Problem, or at most two minor findings |
 | usable with caution | a moderate finding, or three or more minor ones |
-| fix before use | any Problem |
+| fix before use | any Problem, or Checks that add up: 2 points per moderate and 1 per minor finding, 4 points or more (two moderate, or one moderate and two minor, or four minor) |
 | unusable | not in MNI space, or inverted: every number would be wrong |
 
 The **score** runs from 100 (no findings) down to 1. Each major finding costs 40 points, each
@@ -93,6 +93,9 @@ Below the minor bound the finding is a Note.
 | `holes` | drawing | Enclosed cavities or "swiss cheese" (pores). Cavities that are CSF or ventricle don't count, and it stays quiet when `sparse_slices` or `hollow` already explains the empty space. | `missing_pct` (share of the filled volume missing): 2 / 10 / 25 | hole centres | `qc.fix(…, ["holes"])` |
 | `strokes` | drawing | Marks one voxel thick off the plane the lesion was drawn in: flat sheets (at least 200 mm² and 6 mm wide), or strips at least 15 mm long where a stroke crosses or leaves the lesion. | `affected_pct`: 0.5 / 5 / 15 | the stroke slices | `qc.clean(strokes=True)` |
 | `box` | drawing | Rectangular blocks, as a rectangle tool leaves (the bounding box is 85% or more filled). | `affected_pct`: 5 / 25 / 60 | block centres | redraw |
+| `comb` | drawing | Comb-like: the lesion was drawn slice by slice and each outline ends somewhere else, so seen across the slices its edge is a comb of steps. Measured along each axis as the voxels that change between neighbouring slices, relative to a smoothed copy of the same lesion (2 mm), which keeps the shape's real slope but not the slice-to-slice jitter. Reported from 2.0 times; the drawing axis must stand out (1.4 times the most ragged other axis), since holes are ragged in every direction. Not along an axis already reported as gaps or a single slice. | `comb_ratio`: Note above 2.0, then 2.5 / 3.5 / – | a slice across the drawing plane, through the lesion's centre | redraw |
+| `blocky` | drawing | Blocky: one outline repeated over many slices, then a jump to the next (a drawing on thick slices stretched onto a thin grid). A block is at least 5 slices and 3 mm whose outline drifts by at most 10% between neighbours and that ends abruptly at both ends (a jump of at least 8% and 3 times its own drift, or the lesion's flat face). A smooth shape has one such plateau at most, and two separate round lesions have one each with empty slices between, so blocks must form a staircase (each within two slices of the next), or one block must hold 80% of the lesion. Blocks under 10 mm thick (median) make it at most minor. Not reported with `box`. | `blocky_pct` (share of the lesion in blocks): Note from 10, then 35 / 65 / – | a slice across the drawing plane, through the lesion's centre | redraw |
+| `partial_gaps` | drawing | Slices drawn only partly: a region the slices either side (one or two slices away) both hold is missing, at least 2 mm wide and 20 mm², and at least 30% of what those slices share, while the slice itself isn't empty (an empty slice is `sparse_slices`). Reported from 50 mm³ in all; always at least Check, minor. | `missing_pct` (share of the lesion missing): 0 / 10 / 25 | the partly drawn slices | `qc.fix(…, ["partial_gaps"])` |
 | `outside_brain` | extra | Lesion outside the brain mask, beyond a 5 mm rim tolerance. A rim covering 1% or more of the lesion is a Note. Anything more than 10 mm from the brain surface is at least Check, minor, however small: stray marks, not overdrawing. Image-edge fragments are not counted here (they are `edge_artifact`). | `outside_pct`: 1 / 5 / 15 | outside chunks | `qc.clean(outside=True)` |
 | `misregistered` | space | 25% or more lies outside the brain, attached to the lesion: the mask looks shifted, not overdrawn. Always Problem, major. | none | outside chunks | check the registration |
 | `edge_artifact` | extra | Fragments touching the image edge. Always at least minor. | `affected_pct`: 0 / 5 / 20 | fragment centres | `qc.clean(edge=True)` |
@@ -232,6 +235,7 @@ new lqtpy release that doesn't touch QC doesn't force a re-run, and one that doe
 |---|---|---|
 | 1.0 | 0.6.0 | Graded findings, locations, fix hints, verdict and score, tiers, drawing context; new checks (holes, box, values, inverted, misregistered, fragmentation, plausibility) |
 | 1.1 | 0.6.1 | A short, clear gap through a large lesion is a gap even when the pieces either side are round; such gaps are filled slice by slice (`repair_gaps(slices=...)`); lesion more than 10 mm outside the brain is at least Check, minor |
+| 1.2 | 0.7.0 | New checks `comb`, `blocky` and `partial_gaps` (from the user's notes on real masks); Checks add up to "fix before use" (4 points: 2 per moderate, 1 per minor finding) |
 
 ## How the checks were tested
 

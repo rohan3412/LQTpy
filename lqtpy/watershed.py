@@ -26,10 +26,11 @@ The zone map is built once (about 1 s) and cached.
 """
 from __future__ import annotations
 
-import threading
 
 import numpy as np
 from scipy import ndimage
+
+from ._diskcache import once
 
 __all__ = ["zone_map", "border_zones", "ZONES", "HALF_WIDTH_MM"]
 
@@ -55,23 +56,15 @@ _MCA = {"L": (7, 9, 11, 13, 15), "R": (8, 10, 12, 14, 16)}
 _PCA = {"L": (17, 19), "R": (18, 20)}
 _LSA = {"L": (5,), "R": (6,)}  # lateral lenticulostriate (deep MCA)
 
-_MAP = None
-_lock = threading.Lock()
-
-
+@once
 def zone_map():
     """``(zones, affine)``: uint8 border-zone ids (see :data:`ZONES`) on the
     tissue atlas grid (FSL MNI152 1 mm)."""
-    global _MAP
-    if _MAP is None:
-        with _lock:
-            if _MAP is None:
-                from ._diskcache import cached_arrays
-                from .atlases import load_atlas
-                z = cached_arrays(f"border_zones_{HALF_WIDTH_MM:g}mm",
-                                  lambda: {"zones": _build(HALF_WIDTH_MM)[0]})["zones"]
-                _MAP = (z, np.asarray(load_atlas("tissue").img.affine, float))
-    return _MAP
+    from ._diskcache import cached_arrays
+    from .atlases import load_atlas
+    z = cached_arrays(f"border_zones_{HALF_WIDTH_MM:g}mm",
+                      lambda: {"zones": _build(HALF_WIDTH_MM)[0]})["zones"]
+    return z, np.asarray(load_atlas("tissue").img.affine, float)
 
 
 def _build(w):
@@ -158,7 +151,7 @@ def _border_zones(p, parts, load_atlas):
            "n_parts_internal": 0, "n_parts": 0}
     if not total:
         return out
-    z = zones[gm.mask]
+    z = gm.take(zones)
     counts = np.bincount(z, minlength=len(ZONES) + 1)
     for zid in ZONES:
         if counts[zid]:
@@ -181,10 +174,11 @@ def _border_zones(p, parts, load_atlas):
             inv = np.linalg.inv(aff)
             objs = ndimage.find_objects(labels)
             n_int = 0
+            from .morphometry import part_voxels
             for i, sl in enumerate(objs):
                 if sl is None:
                     continue
-                ijk = np.argwhere(labels[sl] == i + 1) + off + np.array([s.start for s in sl])
+                ijk = part_voxels(labels, objs, i + 1, off)
                 world = ijk @ p.affine[:3, :3].T + p.affine[:3, 3]
                 t = np.floor(world @ inv[:3, :3].T + inv[:3, 3] + 0.5).astype(int)
                 ok = np.all((t >= 0) & (t < np.array(zones.shape)), axis=1)

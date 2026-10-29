@@ -50,12 +50,11 @@ from __future__ import annotations
 
 import copy
 import os
-import threading
-from dataclasses import asdict, dataclass, field
 
 import numpy as np
 from scipy import ndimage
 
+from ._diskcache import cached_arrays, once
 from .prepared import PreparedLesion, prepare
 
 __all__ = ["Flag", "Finding", "QCResult", "DrawingContext", "QC_VERSION", "check", "assess",
@@ -120,6 +119,24 @@ DEFAULTS = {
     "csf_only_pct": 70.0,          # plausibility: this much in CSF/ventricles
     "mirror_min_pct": 92.0,        # plausibility: left/right overlap when flipped (bilateral
                                    # lesions reach 70-90% by nature; a flipped copy is ~100%)
+    "drawing_min_slices": 6,       # comb/blocky: the lesion spans at least this many slices
+    "comb_smooth_mm": 2.0,         # comb: smoothing that keeps the shape, not slice jitter
+    "comb_note_ratio": 2.0,        # comb: changes between slices >= this x a smooth outline's
+    "comb_min_anisotropy": 1.4,    # ... and this x the most ragged other axis (holes are ragged
+                                   # along every axis; a slice-by-slice drawing along one)
+    "blocky_same": 0.10,           # blocky: neighbouring slices this alike share one outline ...
+    "blocky_min_run_slices": 5,    # ... over at least this many slices ...
+    "blocky_min_run_mm": 3.0,      # ... and this thickness ...
+    "blocky_jump": 0.08,           # ... ending in a jump of at least this ...
+    "blocky_contrast": 3.0,        # ... and this many times the block's own drift, or a flat face
+    "blocky_face": 0.3,            # ... (an end slice this share of the largest)
+    "blocky_single_pct": 80.0,     # one block alone counts when it holds this share
+    "blocky_note_pct": 10.0,       # this share of the lesion in blocks: a Note
+    "partial_min_share": 0.3,      # partial gaps: a slice missing this share of what its
+                                   # neighbours share ...
+    "partial_min_width_mm": 2.0,   # ... in a region at least this wide ...
+    "partial_min_mm2": 20.0,       # ... and this large ...
+    "partial_min_mm3": 50.0,       # ... adding up to at least this volume
 }
 
 
@@ -132,62 +149,42 @@ Flag = Finding
 # --------------------------------------------------------------------------- #
 # Brain mask (atlas-derived until a dedicated MNI brain mask is bundled)
 # --------------------------------------------------------------------------- #
-_BRAIN = None
-_brain_lock = threading.Lock()
-
-
+@once
 def brain_mask():
     """``(mask, affine)``: a filled, slightly dilated MNI brain mask built
     from the bundled atlases (AAL + DKT31/CMA, excluding extra-cerebral
     CSF). Includes the ventricles. Built once (~0.6 s) and cached, read-only."""
-    global _BRAIN
-    if _BRAIN is not None:
-        return _BRAIN
-    with _brain_lock:
-        if _BRAIN is not None:
-            return _BRAIN
-        from ._diskcache import cached_arrays
-        from .atlases import load_atlas
-
-        dk = load_atlas("dk")
-        f = cached_arrays("brain_mask", lambda: {"mask": _build_brain(dk, load_atlas("aal"))})["mask"]
-        _BRAIN = (f.astype(bool), np.asarray(dk.img.affine, float))
-        _BRAIN[0].flags.writeable = False
-        return _BRAIN
+    from .atlases import load_atlas
+    dk = load_atlas("dk")
+    f = cached_arrays("brain_mask", lambda: {"mask": _build_brain(dk, load_atlas("aal"))})["mask"]
+    out = (f.astype(bool), np.asarray(dk.img.affine, float))
+    out[0].flags.writeable = False
+    return out
 
 
 def _build_brain(dk, aal):
     from .prepared import _nearest_on_grid
-    if True:
-        d = dk.label_array()
-        m = (d > 0) & (d != 24)  # 24 = extra-cerebral CSF
-        a = aal.label_array() > 0
-        nz = np.argwhere(a)
-        am = _nearest_on_grid(a, np.asarray(aal.img.affine, float),
-                              (tuple(nz.min(0)), tuple(nz.max(0) + 1)),
-                              d.shape, np.asarray(dk.img.affine, float))
-        f = ndimage.binary_fill_holes(m | am)
-        for z in range(f.shape[2]):   # close sulcal CSF gaps slice by slice
-            f[:, :, z] = ndimage.binary_fill_holes(f[:, :, z])
-        return ndimage.binary_dilation(f, iterations=2)
+    d = dk.label_array()
+    m = (d > 0) & (d != 24)  # 24 = extra-cerebral CSF
+    a = aal.label_array() > 0
+    nz = np.argwhere(a)
+    am = _nearest_on_grid(a, np.asarray(aal.img.affine, float),
+                          (tuple(nz.min(0)), tuple(nz.max(0) + 1)),
+                          d.shape, np.asarray(dk.img.affine, float))
+    f = ndimage.binary_fill_holes(m | am)
+    for z in range(f.shape[2]):   # close sulcal CSF gaps slice by slice
+        f[:, :, z] = ndimage.binary_fill_holes(f[:, :, z])
+    return ndimage.binary_dilation(f, iterations=2)
 
 
-_DEPTH = None
-
-
+@once
 def _outside_depth():
     """Distance (mm) of every voxel outside the brain mask to the brain.
     Built once, lazily (only when some lesion extends outside)."""
-    global _DEPTH
-    if _DEPTH is None:
-        with _brain_lock:
-            if _DEPTH is None:
-                bm, baff = brain_mask()
-                zooms = np.linalg.norm(baff[:3, :3], axis=0)
-                d = ndimage.distance_transform_edt(~bm, sampling=zooms).astype(np.float32)
-                d.flags.writeable = False
-                _DEPTH = d
-    return _DEPTH
+    bm, baff = brain_mask()
+    zooms = np.linalg.norm(baff[:3, :3], axis=0)
+    return cached_arrays("outside_depth", lambda: {"depth": ndimage.distance_transform_edt(
+        ~bm, sampling=zooms).astype(np.float32)})["depth"]
 
 
 # --------------------------------------------------------------------------- #
@@ -218,9 +215,9 @@ def _edge_components(p: PreparedLesion) -> "list[int]":
     brain. A real lesion in an MNI-space mask never reaches the edge of the
     image; fragments there are left behind by drawing/export tools."""
     def build():
-        from .morphometry import components
+        from .morphometry import component_boxes, components, part_voxels
         labels, lo, sizes = components(p)
-        objs = ndimage.find_objects(labels)
+        objs = component_boxes(p)
         edge = []
         for i, sl in enumerate(objs):
             if sl is None:
@@ -235,7 +232,7 @@ def _edge_components(p: PreparedLesion) -> "list[int]":
         inv = np.linalg.inv(baff)
         out = []
         for cid in edge:
-            ijk = np.argwhere(labels == cid) + lo
+            ijk = part_voxels(labels, objs, cid, lo)
             world = ijk @ p.affine[:3, :3].T + p.affine[:3, 3]
             v = np.round(world @ inv[:3, :3].T + inv[:3, 3]).astype(int)
             inside = np.all((v >= 0) & (v < np.asarray(bm.shape)), axis=1)
@@ -260,7 +257,10 @@ def _analysis_mask(p: PreparedLesion, opts, *, drop_specks: bool = True) -> np.n
     return keep[labels]
 
 
-_without_specks = _analysis_mask  # backward-compatible name
+def _extent(sub: np.ndarray, axis: int) -> int:
+    """Slices from the first to the last non-empty one along ``axis``."""
+    nz = np.flatnonzero(sub.any(axis=tuple(a for a in range(sub.ndim) if a != axis)))
+    return int(nz[-1] - nz[0] + 1) if nz.size else 0
 
 
 def _runs(flags: np.ndarray):
@@ -413,9 +413,7 @@ def gap_evidence(lesion, opts=None) -> "dict | None":
         ev = _gap_evidence_axis(sub, ax, max_run, opts, long_run)
         span = ev["n_slices"] * mm
         if span <= opts["flat_slab_max_mm"]:
-            idx = np.argwhere(sub)
-            wide = min((idx[:, a].max() - idx[:, a].min() + 1) * _axis_mm(p, a)
-                       for a in range(3) if a != ax)
+            wide = min(_extent(sub, a) * _axis_mm(p, a) for a in range(3) if a != ax)
             if wide >= opts["flat_plate_min_ratio"] * span:
                 continue    # everything within one thin, wide slab: a single-slice drawing (flat)
         slabs = _slab_ratio(sub, ax)
@@ -500,16 +498,18 @@ def _flat_components(p: PreparedLesion, labels, lo, sizes, opts):
     thicker slab whose layers all share one outline (a single thick slice
     drawn once and warped; ``flat_slab_max_mm``, ``flat_slab_min_ratio``,
     ``flat_min_consistency``)."""
+    from .morphometry import component_boxes, part_voxels
     out = []
     names = slice_axis_names(p.affine)
     edge = set(_edge_components(p))
     zooms = np.linalg.norm(p.affine[:3, :3], axis=0)
+    boxes = component_boxes(p)
     for i, n in enumerate(sizes):
         if n < opts["flat_min_voxels"]:
             break
         if i + 1 in edge:
             continue
-        ijk = np.argwhere(labels == i + 1) + lo
+        ijk = part_voxels(labels, boxes, i + 1, lo)
         world = ijk @ p.affine[:3, :3].T
         c = world - world.mean(0)
         evals, evecs = np.linalg.eigh(np.cov(c.T))
@@ -733,6 +733,235 @@ def _hollow(sub: np.ndarray):
     return best, interior_frac, best_ax
 
 
+def _diff_along(m: np.ndarray, axis: int) -> np.ndarray:
+    """``m[k] ^ m[k + 1]`` along ``axis`` (voxels that change between
+    neighbouring slices), as a view-based XOR."""
+    a = [slice(None)] * m.ndim
+    b = [slice(None)] * m.ndim
+    a[axis], b[axis] = slice(1, None), slice(None, -1)
+    return m[tuple(a)] ^ m[tuple(b)]
+
+
+def _comb(sub: np.ndarray, zooms, opts, skip_axes=()) -> "dict | None":
+    """Comb-like drawing: each slice's outline ends somewhere else, so seen
+    across the slices the edge is a comb of steps. Measured per grid axis as
+    the voxel changes between neighbouring slices relative to a smoothed copy
+    of the same lesion (``comb_smooth_mm``), which keeps the shape's real
+    slope but not slice-to-slice jitter. A slice-by-slice drawing is ragged
+    along one axis only: holes or a porous mask are ragged along all three,
+    so the axis must stand out (``comb_min_anisotropy``)."""
+    n = int(np.count_nonzero(sub))
+    if n < opts["gap_min_voxels"]:
+        return None
+    zooms = np.asarray(zooms, float)
+    sigma = opts["comb_smooth_mm"] / zooms
+    pad = int(np.ceil(4 * sigma.max())) + 1
+    padded = np.pad(sub, pad)
+    smooth = ndimage.gaussian_filter(padded.astype(np.float32), sigma) > 0.5
+    if np.count_nonzero(smooth) < 0.5 * n:
+        return None                       # thin or tiny: smoothing erases it
+    ratios = {}
+    for a in range(3):
+        if _extent(sub, a) < opts["drawing_min_slices"]:
+            continue
+        ratios[a] = (np.count_nonzero(_diff_along(padded, a))
+                     / max(np.count_nonzero(_diff_along(smooth, a)), 1))
+    cand = {a: r for a, r in ratios.items() if a not in skip_axes}
+    if not cand:
+        return None
+    a = max(cand, key=cand.get)
+    others = [r for b, r in ratios.items() if b != a]
+    if cand[a] < opts["comb_note_ratio"] or (others and cand[a] < opts["comb_min_anisotropy"] * max(others)):
+        return None
+    jag = int(np.count_nonzero(padded ^ smooth))
+    return {"axis": a, "ratio": round(float(cand[a]), 2), "jagged_pct": round(100.0 * jag / n, 1),
+            "ratios": {int(k): round(float(v), 2) for k, v in ratios.items()}}
+
+
+def _blocky(sub: np.ndarray, zooms, opts) -> "dict | None":
+    """Blocky drawing: one outline copied over many slices, then a jump to
+    the next (a drawing on thick slices stretched onto a thin grid). A block
+    is a run of at least ``blocky_min_run_slices`` slices (and
+    ``blocky_min_run_mm``) whose outline drifts by at most ``blocky_same``
+    between neighbours and that ends abruptly at both ends: a jump of the
+    outline ``blocky_contrast`` times its own drift (at least
+    ``blocky_jump``), or the lesion's flat face. A smooth shape has one such
+    plateau at its widest point at most, so a blocky mask needs two blocks,
+    or one holding ``blocky_single_pct`` of the lesion."""
+    total = int(np.count_nonzero(sub))
+    best = None
+    for a in range(3):
+        if _extent(sub, a) < opts["drawing_min_slices"]:
+            continue
+        mm = np.moveaxis(sub, a, 0)
+        area = mm.reshape(mm.shape[0], -1).sum(1)
+        diff = _diff_along(sub, a).sum(axis=tuple(b for b in range(3) if b != a))
+        rel = diff / np.maximum(area[:-1], 1)
+        same = (area[:-1] > 0) & (area[1:] > 0) & (rel <= opts["blocky_same"])
+        run_min = max(opts["blocky_min_run_slices"], int(np.ceil(opts["blocky_min_run_mm"] / zooms[a])))
+        face = opts["blocky_face"] * area.max()
+        in_run = np.zeros(mm.shape[0], bool)
+        runs = []
+        for k, j in _runs(same):          # slices k..j hold nearly one outline
+            if j - k + 1 < run_min:
+                continue
+            need = max(opts["blocky_jump"], opts["blocky_contrast"] * float(rel[k:j].max()))
+            left = rel[k - 1] >= need if k > 0 and area[k - 1] > 0 else area[k] >= face
+            right = (diff[j] / max(area[j], 1) >= need if j + 1 < len(area) and area[j + 1] > 0
+                     else area[j] >= face)
+            if left and right:
+                runs.append((int(k), int(j) + 1))
+        # Blocks form a staircase: each hands over to the next within two
+        # slices. (Two separate round lesions have a plateau each, with
+        # empty slices between them.)
+        stair = [r for i, r in enumerate(runs)
+                 if (i > 0 and r[0] - runs[i - 1][1] <= 2) or (i + 1 < len(runs) and runs[i + 1][0] - r[1] <= 2)]
+        for c, b in stair:
+            in_run[c:b] = True
+        pct = 100.0 * float(area[in_run].sum()) / max(total, 1)
+        if not stair and len(runs) == 1:
+            c, b = runs[0]
+            single = 100.0 * float(area[c:b].sum()) / max(total, 1)
+            if single >= opts["blocky_single_pct"]:
+                stair, pct = runs, single
+                in_run[c:b] = True
+        runs = stair
+        if runs and (best is None or pct > best["blocky_pct"]):
+            lengths = [b - c for c, b in runs]
+            best = {"axis": a, "blocky_pct": round(pct, 1), "n_blocks": len(runs),
+                    "block_mm": round(float(np.median(lengths)) * float(zooms[a]), 1),
+                    "longest_mm": round(max(lengths) * float(zooms[a]), 1), "blocks": runs}
+    return best if best is not None and best["blocky_pct"] >= opts["blocky_note_pct"] else None
+
+
+def _partial_gaps(sub: np.ndarray, zooms, opts, want_mask: bool = False) -> "dict | None":
+    """Slices drawn only partly: a region at least ``partial_min_width_mm``
+    wide and ``partial_min_mm2`` large that both neighbouring drawn slices
+    hold (one or two slices away) is missing, and it is at least
+    ``partial_min_share`` of what the neighbours share, though the slice
+    itself isn't empty (an empty slice is a full gap: ``sparse_slices``).
+    Returns the axis with the most missing voxels; ``want_mask`` adds
+    ``mask``, the missing voxels in ``sub``'s frame (what :func:`lqtpy.qc.fix`
+    fills)."""
+    best = None
+    s4 = np.zeros((1, 3, 3), bool)
+    s4[0] = ndimage.generate_binary_structure(2, 1)
+    total = int(np.count_nonzero(sub))
+    for a in range(3):
+        mm = np.moveaxis(sub, a, 0)
+        n = mm.shape[0]
+        if n < 3:
+            continue
+        others = [float(zooms[i]) for i in range(3) if i != a]
+        r = max(1, int(round(opts["partial_min_width_mm"] / 2 / min(others))))
+        px = others[0] * others[1]
+        area = mm.reshape(n, -1).sum(1)
+        missing = np.zeros(n, np.int64)
+        share = np.zeros(n)
+        fill = np.zeros_like(mm) if want_mask else None
+        for span in (1, 2):
+            m = n - span - 1               # gap slices k..k+span-1, k = 1..m
+            if m < 1:
+                continue
+            both = mm[:m] & mm[span + 1:span + 1 + m]
+            gap = both.copy()
+            drawn = np.ones(m, bool)
+            for j in range(span):
+                gap &= ~mm[1 + j:1 + j + m]
+                drawn &= area[1 + j:1 + j + m] > 0
+            nb = both.reshape(m, -1).sum(1)
+            ng = gap.reshape(m, -1).sum(1)
+            # Only slices whose whole gap could pass get the (costly) width test.
+            cand = np.flatnonzero(drawn & (ng >= opts["partial_min_share"] * np.maximum(nb, 1))
+                                  & (ng * px >= opts["partial_min_mm2"]))
+            if not cand.size:
+                continue
+            g = gap[cand]
+            wide = ndimage.binary_dilation(ndimage.binary_erosion(g, s4, iterations=r), s4,
+                                           iterations=r) & g
+            nw = np.zeros(m, np.int64)
+            nw[cand] = wide.reshape(len(cand), -1).sum(1)
+            frac = nw / np.maximum(nb, 1)
+            ok = drawn & (frac >= opts["partial_min_share"]) & (nw * px >= opts["partial_min_mm2"])
+            wide_at = dict(zip(cand.tolist(), wide))
+            for i in np.flatnonzero(ok):
+                for j in range(span):
+                    k = i + 1 + j
+                    if nw[i] > missing[k]:
+                        missing[k], share[k] = nw[i], frac[i]
+                        if fill is not None:
+                            fill[k] = wide_at[int(i)]
+        n_miss = int(missing.sum())
+        if n_miss * float(np.prod(zooms)) >= opts["partial_min_mm3"] and (
+                best is None or n_miss > best["missing_voxels"]):
+            ks = np.flatnonzero(missing)
+            best = {"axis": a, "missing_voxels": n_miss,
+                    "missing_pct": round(100.0 * n_miss / (n_miss + total), 2),
+                    "slices": [int(k) for k in ks], "worst_share": round(float(share.max()), 2)}
+            if fill is not None:
+                best["mask"] = np.moveaxis(fill, 0, a)
+    return best
+
+
+def _style_flags(style: np.ndarray, zooms, opts, names, skip_axes, lo) -> "list[Flag]":
+    """Comb-like, blocky and partly drawn slices, as raw findings (graded in
+    :mod:`lqtpy.qc_grade`). Slice indices in the evidence are on the lesion
+    grid."""
+    out = []
+    comb = _comb(style, zooms, opts, skip_axes=skip_axes)
+    if comb is not None:
+        comb["plane"] = names[comb["axis"]]
+        out.append(Flag(
+            "comb", WARN,
+            f"The outline changes {comb['ratio']:.1f} times as much from one {comb['plane']} slice to "
+            "the next as a smooth outline of this shape would: each slice was drawn ending somewhere "
+            "else (comb-like), so the edges are ragged in the other views.",
+            comb, "Redraw the slices with consistent outlines; numbers at the lesion's edges are "
+                  "less certain."))
+    blk = _blocky(style, zooms, opts)
+    if blk is not None and blk["axis"] not in skip_axes:
+        blk["plane"] = names[blk["axis"]]
+        blk["blocks"] = [[int(a + lo[blk["axis"]]), int(b + lo[blk["axis"]])] for a, b in blk["blocks"]]
+        out.append(Flag(
+            "blocky", WARN,
+            f"{blk['blocky_pct']:.0f}% of the lesion is in {blk['n_blocks']} block"
+            f"{'s' if blk['n_blocks'] != 1 else ''} where one {blk['plane']} outline is repeated over "
+            f"about {blk['block_mm']:g} mm, with jumps between them (blocky): it looks drawn on thick "
+            "slices and stretched onto this grid, so the shape between those slices is a guess.",
+            blk, "Draw on the thin slices, or interpolate between the drawn outlines instead of "
+                 "copying them."))
+    gaps = _partial_gaps(style, zooms, opts)
+    if gaps is not None and gaps["axis"] not in skip_axes:
+        ax = gaps["axis"]
+        gaps["plane"] = names[ax]
+        gaps["slices"] = [int(k + lo[ax]) for k in gaps["slices"]]
+        n = len(gaps["slices"])
+        mm3 = gaps["missing_voxels"] * float(np.prod(zooms))
+        out.append(Flag(
+            "partial_gaps", WARN,
+            f"{n} {gaps['plane']} slice{'s are' if n != 1 else ' is'} drawn only partly: a region the "
+            f"slices either side hold is missing ({mm3:.0f} mm³, {gaps['missing_pct']:g}% of the "
+            f"lesion; up to {100 * gaps['worst_share']:.0f}% of what the neighbouring slices share).",
+            gaps, "Complete those slices, or fill them with lqtpy.qc.fix(lesion, ['partial_gaps'])."))
+    return out
+
+
+def _partial_gap_voxels(lesion, *, threshold: float = 0.5, **options) -> np.ndarray:
+    """The voxels (on the lesion's own grid) missing from partly drawn
+    slices: what :func:`lqtpy.qc.fix` adds for ``partial_gaps``."""
+    from .morphometry import components
+    opts = {**DEFAULTS, **options}
+    p = prepare(lesion, threshold)
+    _, lo, _ = components(p)
+    style = _analysis_mask(p, opts)
+    out = np.zeros(p.shape, bool)
+    gaps = _partial_gaps(style, np.linalg.norm(p.affine[:3, :3], axis=0), opts, want_mask=True)
+    if gaps is not None:
+        m = gaps["mask"]
+        out[tuple(slice(int(lo[a]), int(lo[a]) + m.shape[a]) for a in range(3))] = m
+    return out
+
+
 def _filled_volume(sub: np.ndarray, axis: int) -> int:
     """Voxels an outline encloses (close, fill slice by slice along
     ``axis``, then undo the closing), for the hollow finding's extent."""
@@ -954,19 +1183,20 @@ def _check(p: PreparedLesion, expected_side, mni, opts, ctx=None) -> "list[Flag]
     # -- strokes: thin lines/sheets drawn by mistake -------------------- #
     # Planes where a drawing problem was found: their one-voxel slices are
     # that problem (reported above), not strokes.
-    drawn = set()
+    problem_axes = set()
+    if gap is not None:
+        problem_axes.add(gap["axis"])
+    for f in flags:
+        if f.id == "flat":
+            if "slab" in f.evidence:
+                problem_axes.add(f.evidence["slab"]["axis"])
+            for c in f.evidence.get("components", []):
+                problem_axes.add({v: k for k, v in names.items()}.get(c["plane"], -1))
+    drawn = set(problem_axes)
     if ctx is not None and ctx.drawing_axis is not None:
         drawn.add(ctx.drawing_axis)
     if ctx is not None and ctx.drawn_slices:
         drawn |= set(ctx.drawn_slices)
-    if gap is not None:
-        drawn.add(gap["axis"])
-    for f in flags:
-        if f.id == "flat":
-            if "slab" in f.evidence:
-                drawn.add(f.evidence["slab"]["axis"])
-            for c in f.evidence.get("components", []):
-                drawn.add({v: k for k, v in names.items()}.get(c["plane"], -1))
     if not drawn and sub.any():
         # No drawing problem named the plane: infer it. Its slices' rims are
         # part of an ordinary slice-by-slice drawing.
@@ -993,6 +1223,22 @@ def _check(p: PreparedLesion, expected_side, mni, opts, ctx=None) -> "list[Flag]
                           "Erase the strokes in your drawing tool, or remove them with "
                           "lqtpy.qc.clean(lesion, strokes=True)."))
 
+    # -- drawing style: comb-like, blocky, partly drawn slices ------------- #
+    # Measured without specks, edge fragments and strokes, and not along an
+    # axis already reported as a gap or single-slice drawing (one problem,
+    # reported once).
+    if not hollow:
+        style_skip = {gap["axis"]} if gap is not None else set()
+        for f in flags:
+            # a single-slice drawing silences its axis only when it is most
+            # of the lesion, not for one small flat part
+            if f.id == "flat" and ("slab" in f.evidence or sum(
+                    c["n_voxels"] for c in f.evidence.get("components", [])) >= 0.5 * p.n_voxels):
+                style_skip |= problem_axes
+        style = _analysis_mask(p, opts) & ~svox
+        if style.any():
+            flags += _style_flags(style, zooms, opts, names, style_skip, lo)
+
     # -- brain-mask checks --------------------------------------------------- #
     if mni:
         com = morph["center_of_mass_mm"]
@@ -1002,16 +1248,22 @@ def _check(p: PreparedLesion, expected_side, mni, opts, ctx=None) -> "list[Flag]
         # outside the brain without them, so one artefact isn't reported twice.
         src = p
         if edge and len(edge) < len(sizes):
-            import nibabel as nib
             rest = p.mask.copy()
             box = tuple(slice(int(lo[a]), int(lo[a]) + labels.shape[a]) for a in range(3))
             rest[box] &= ~np.isin(labels, edge)
             if rest.any():
-                src = prepare(nib.Nifti1Image(rest.astype(np.uint8), p.affine), 0.5, name=p.name)
+                src = p._derived(rest, name=p.name, threshold=0.5)
         on = src.on_grid((bm.shape, baff))
         n_on = on.n_voxels
-        outside = on.mask & ~bm
-        n_out = int(outside.sum())
+        # Everything below works inside the lesion's bounding box on the
+        # brain grid (labels, sums and centres come out as on the full grid).
+        ijk_on = on.ijk()
+        o3 = ijk_on.min(0) if n_on else np.zeros(3, int)
+        box = tuple(slice(int(a), int(b) + 1) for a, b in zip(o3, ijk_on.max(0) if n_on else o3 - 1))
+        les = on.mask[box]
+        bmb = bm[box]
+        outside = les & ~bmb
+        n_out = int(np.count_nonzero(outside))
         total = n_on + on.outside_fov_voxels
         out_frac = (n_out + on.outside_fov_voxels) / total if total else 0.0
         if not in_box or out_frac > opts["not_mni_outside_frac"]:
@@ -1028,33 +1280,35 @@ def _check(p: PreparedLesion, expected_side, mni, opts, ctx=None) -> "list[Flag]
         elif n_out:
             lab, nlab = ndimage.label(outside, structure=_S26)
             if nlab:
-                depth_map = _outside_depth()
+                from .morphometry import label_centres
+                depth_map = _outside_depth()[box]
                 chunk = np.bincount(lab.ravel())[1:]
-                depth = np.asarray(ndimage.maximum(depth_map, lab, index=np.arange(1, nlab + 1)))
+                depth = np.full(nlab, -np.inf, depth_map.dtype)
+                np.maximum.at(depth, lab[outside] - 1, depth_map[outside])
                 bvox = float(abs(np.linalg.det(baff[:3, :3])))
                 # Overdrawing that hugs the brain edge within ``outside_rim_mm``
                 # is tolerated; everything beyond it is measured.
                 beyond = outside & (depth_map > opts["outside_rim_mm"])
-                n_beyond = int(beyond.sum())
-                n_far = int((outside & (depth_map >= opts["outside_far_mm"])).sum())
+                n_beyond = int(np.count_nonzero(beyond))
+                n_far = int(np.count_nonzero(outside & (depth_map >= opts["outside_far_mm"])))
                 rim_pct = 100.0 * (n_out - n_beyond) / max(n_on, 1)
                 if n_beyond * bvox >= opts["outside_note_mm3"] or rim_pct >= 1.0 or n_far:
                     order = np.argsort(-chunk)
                     idx = [int(i) + 1 for i in order[:10]]
-                    cents = ndimage.center_of_mass(outside, lab, index=idx)
+                    cents = label_centres(lab, nlab, o3)[[i - 1 for i in idx]]
                     chunks = [{"voxels": int(chunk[i - 1]), "mm3": round(float(chunk[i - 1] * bvox), 1),
                                "depth_mm": round(float(depth[i - 1]), 1),
                                "mm": [round(float(v), 1) for v in (baff[:3, :3] @ np.asarray(c) + baff[:3, 3])]}
                               for i, c in zip(idx, cents)]
                     # How much of the outside part is joined to lesion inside the
                     # brain (a shifted lesion) rather than detached (a stray blob).
-                    whole, _ = ndimage.label(on.mask, structure=_S26)
-                    inside_ids = np.unique(whole[on.mask & bm])
+                    whole, _ = ndimage.label(les, structure=_S26)
+                    inside_ids = np.unique(whole[les & bmb])
                     attached = np.isin(whole[beyond], inside_ids[inside_ids > 0])
                     attached_pct = 100.0 * attached.mean() if attached.size else 0.0
                     # Direction: from the lesion's centre towards what lies outside.
-                    oc = np.argwhere(beyond if n_beyond else outside).mean(0)
-                    lc = np.argwhere(on.mask).mean(0)
+                    oc = (np.argwhere(beyond if n_beyond else outside) + o3).mean(0)
+                    lc = ijk_on.mean(0)
                     shift = baff[:3, :3] @ (oc - lc)
                     msg = (f"{n_beyond * bvox:.0f} mm³ of the lesion "
                            f"({100 * n_beyond / max(n_on, 1):.0f}%) lies outside the brain."

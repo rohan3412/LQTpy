@@ -56,6 +56,35 @@ def components(prepared):
     return prepared.cached("components", build)
 
 
+def component_boxes(prepared):
+    """``ndimage.find_objects`` of :func:`components`' labels, cached."""
+    labels = components(prepared)[0]
+    return prepared.cached("component_boxes", lambda: ndimage.find_objects(labels))
+
+
+def part_voxels(labels, boxes, k, offset=(0, 0, 0)) -> np.ndarray:
+    """``np.argwhere(labels == k) + offset`` (same rows, same order), scanning
+    only part ``k``'s bounding box ``boxes[k - 1]`` (from
+    ``ndimage.find_objects``) instead of the whole label array."""
+    from .prepared import _nonzero
+    sl = boxes[k - 1]
+    ijk = np.column_stack(_nonzero(labels[sl] == k))
+    return ijk + (np.asarray(offset) + np.array([s.start for s in sl]))
+
+
+def label_centres(labels, n: int, offset=(0, 0, 0)) -> np.ndarray:
+    """``(n, 3)`` voxel-space centres of labels 1..n, shifted by ``offset``:
+    the values ``ndimage.center_of_mass`` gives for the same labels in a
+    larger array whose origin is ``-offset`` (exact integer sums, one
+    division), without a full-size float array and label sort."""
+    nz = np.flatnonzero(labels)
+    lab = labels.reshape(-1)[nz]
+    ijk = np.unravel_index(nz, labels.shape)
+    cnt = np.bincount(lab, minlength=n + 1)[1:n + 1].astype(float)
+    return np.column_stack([np.bincount(lab, weights=c + o, minlength=n + 1)[1:n + 1] / cnt
+                            for c, o in zip(ijk, offset)])
+
+
 def compute_morphometry(lesion) -> dict:
     """Morphometric measures for a lesion.
 
