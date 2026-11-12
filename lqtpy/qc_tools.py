@@ -33,6 +33,8 @@ PROBLEM_KIND = {
 FIXABLE = ("edge_artifact", "specks", "strokes", "outside_brain", "holes", "hollow", "sparse_slices",
            "partial_gaps")
 _S26 = np.ones((3, 3, 3), bool)
+#: Fixes judged against the MNI brain: never made for a mask that isn't in MNI space.
+_MNI_ONLY = ("outside_brain",)
 
 
 def _finding(p, finding, **kw):
@@ -92,7 +94,8 @@ def _outside_voxels(p, opts, rim_only: bool = False) -> np.ndarray:
     return m
 
 
-def problem_mask(lesion, finding, *, threshold: float = 0.5, **options) -> np.ndarray:
+def problem_mask(lesion, finding, *, threshold: float = 0.5, mni: bool = True,
+                 **options) -> np.ndarray:
     """Boolean mask (the lesion's own grid) of the voxels ``finding`` is
     about; ``finding`` is a :class:`~lqtpy.qc_model.Finding` or a finding
     id. See :data:`PROBLEM_KIND` for what the voxels mean. An id that isn't
@@ -103,8 +106,8 @@ def problem_mask(lesion, finding, *, threshold: float = 0.5, **options) -> np.nd
     from .prepared import prepare
     p = prepare(lesion, threshold)
     opts = {**qc.DEFAULTS, **options}
-    f = _finding(p, finding, threshold=threshold)
-    if f is None:
+    f = _finding(p, finding, threshold=threshold, mni=mni)
+    if f is None or (not mni and f.id == "outside_brain"):
         return np.zeros(p.shape, bool)
     labels, lo, sizes = components(p)
     fid = f.id
@@ -143,7 +146,8 @@ def problem_mask(lesion, finding, *, threshold: float = 0.5, **options) -> np.nd
     return np.zeros(p.shape, bool)
 
 
-def export_problems(lesion, out_dir, *, threshold: float = 0.5, context=None, **options) -> "list[dict]":
+def export_problems(lesion, out_dir, *, threshold: float = 0.5, context=None, mni: bool = True,
+                    **options) -> "list[dict]":
     """Write one overlay mask per finding into ``out_dir`` (created if
     needed), on the lesion's own grid, to load over it in MRIcroGL or
     ITK-SNAP while fixing: ``<lesion>_<finding id>.nii.gz``, 1 where the
@@ -156,11 +160,11 @@ def export_problems(lesion, out_dir, *, threshold: float = 0.5, context=None, **
     p = prepare(lesion, threshold)
     os.makedirs(out_dir, exist_ok=True)
     out, seen = [], set()
-    for f in qc.check(p, context=context):
+    for f in qc.check(p, context=context, mni=mni):
         if f.id in seen:
             continue
         seen.add(f.id)
-        m = problem_mask(p, f, threshold=threshold, **options)
+        m = problem_mask(p, f, threshold=threshold, mni=mni, **options)
         if not m.any():
             continue
         path = os.path.join(out_dir, f"{p.name}_{f.id}.nii.gz")
@@ -172,7 +176,8 @@ def export_problems(lesion, out_dir, *, threshold: float = 0.5, context=None, **
     return out
 
 
-def fix_plan(lesion, *, threshold: float = 0.5, context=None, ids=None, **options) -> "list[dict]":
+def fix_plan(lesion, *, threshold: float = 0.5, context=None, ids=None, mni: bool = True,
+             **options) -> "list[dict]":
     """Each fix lqtpy can make, worked out on its own, for a preview: one
     entry per fixable finding the mask has (or per id in ``ids``), in
     :data:`FIXABLE` order::
@@ -183,16 +188,19 @@ def fix_plan(lesion, *, threshold: float = 0.5, context=None, ids=None, **option
     ``added`` / ``removed`` are boolean masks on the mask's own grid. Every
     entry starts from the original mask, so after applying one, plan again
     (fixes can overlap: filling gaps can also fill a hole). A fix that
-    would change nothing is left out. Nothing is written."""
+    would change nothing is left out. Nothing is written. ``mni=False``
+    (a mask not in MNI space): nothing is judged against the MNI brain, so
+    no "outside the brain" fix is offered."""
     from . import qc
     from .prepared import prepare
     from .qc_advice import advice_for
     p = prepare(lesion, threshold)
-    found = {f.id: f for f in qc.check(p, context=context)}
-    wanted = [i for i in FIXABLE if (i in found if ids is None else i in ids)]
+    found = {f.id: f for f in qc.check(p, context=context, mni=mni)}
+    wanted = [i for i in FIXABLE if (i in found if ids is None else i in ids)
+              and (mni or i not in _MNI_ONLY)]
     out = []
     for fid in wanted:
-        _, rep = fix(p, [fid], threshold=threshold, context=context, **options)
+        _, rep = fix(p, [fid], threshold=threshold, context=context, mni=mni, **options)
         if not (rep["voxels_added"] or rep["voxels_removed"]):
             continue
         f = found.get(fid)
@@ -205,13 +213,15 @@ def fix_plan(lesion, *, threshold: float = 0.5, context=None, ids=None, **option
     return out
 
 
-def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
+def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, mni: bool = True, **options):
     """Repair what lqtpy can repair safely: strokes, specks, edge fragments,
     voxels beyond the brain edge (removed), gaps between drawn slices, partly
     drawn slices, enclosed holes and unfilled outlines (filled).
 
     ``ids``: finding ids to fix (default: every fixable finding the mask
-    has). Returns ``(new_image, report)``; the input is never changed.
+    has). ``mni=False`` (a mask not in MNI space, e.g. drawn on the patient's
+    own scan): the check skips the MNI brain, and an ``outside_brain`` fix is
+    skipped even when asked for. Returns ``(new_image, report)``; the input is never changed.
     ``report``: ``applied`` / ``skipped`` (with reasons), ``voxels_added``,
     ``voxels_removed``, and boolean masks ``added`` and ``removed`` on the
     mask's own grid (for previews and undo)."""
@@ -220,7 +230,7 @@ def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
     from .prepared import prepare
     p = prepare(lesion, threshold)
     opts = {**qc.DEFAULTS, **options}
-    found = {f.id: f for f in qc.check(p, context=context)}
+    found = {f.id: f for f in qc.check(p, context=context, mni=mni)}
     wanted = list(ids) if ids is not None else [i for i in FIXABLE if i in found]
     cur = p.mask.copy()
     applied, skipped = [], {}
@@ -229,6 +239,9 @@ def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
             skipped[fid] = "not something lqtpy can repair (redraw or re-register)"
             continue
         if fid not in found and ids is None:
+            continue
+        if not mni and fid in _MNI_ONLY:
+            skipped[fid] = "only for masks in MNI space (the brain's edge is the MNI template's)"
             continue
         before = cur.copy()
         cp = p._derived(cur.copy(), name=p.name, threshold=0.5)

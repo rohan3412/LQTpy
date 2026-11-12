@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.1
+
+A fix for masks that are not in MNI space. Results for MNI masks are unchanged.
+
+### Fixed
+- `qc.fix()`, `qc.fix_plan()`, `qc.problem_mask()` and `qc_tools.export_problems()` take
+  `mni=False` for a mask that isn't in MNI space (for example one drawn on the patient's own
+  scan). They used to ignore it and judge the mask against the MNI brain, so `fix_plan` could
+  offer, and `fix` could make, an "outside the brain" fix that removes real lesion voxels. Now
+  nothing is judged against the MNI brain when `mni=False`, and an `outside_brain` fix is
+  skipped even when asked for. The check itself (`qc.assess(..., mni=False)`) was already right.
+
 ## 0.8.0
 
 About twice as fast, with every existing output unchanged, plus new tools that stay off until

@@ -250,3 +250,42 @@ def test_fsl_style_text_mat_is_still_a_plain_matrix(tmp_path):
     np.savetxt(str(f), np.eye(4))
     kind, m = load_transform(str(f))
     assert kind == "affine" and np.array_equal(m, np.eye(4))
+
+
+# --------------------------------------------------------------------------- #
+# mni=False: fixes and overlays never use the MNI brain (0.8.1)
+# --------------------------------------------------------------------------- #
+def _part_beyond_mni_brain():
+    return S.img(S.sphere(C, 12) | S.sphere([0, -100, -55], 8))
+
+
+def test_fix_plan_offers_no_outside_brain_fix_for_non_mni_masks():
+    img = _part_beyond_mni_brain()
+    assert [e["id"] for e in qc.fix_plan(img)] == ["outside_brain"]          # MNI: as before
+    assert qc.fix_plan(img, mni=False) == []
+    assert qc.fix_plan(img, mni=False, ids=["outside_brain"]) == []
+
+
+def test_fix_never_removes_outside_brain_for_non_mni_masks():
+    img = _part_beyond_mni_brain()
+    _, rep = qc.fix(img, mni=False)
+    assert rep["applied"] == [] and rep["voxels_removed"] == 0
+    _, rep = qc.fix(img, ["outside_brain"], mni=False)                     # even when asked
+    assert rep["applied"] == [] and "MNI" in rep["skipped"]["outside_brain"]
+    _, rep = qc.fix(img, ["outside_brain"])
+    assert rep["applied"] == ["outside_brain"]
+
+
+def test_overlays_follow_mni(tmp_path):
+    from lqtpy.qc_tools import export_problems, problem_mask
+    img = _part_beyond_mni_brain()
+    assert not problem_mask(img, "outside_brain", mni=False).any()
+    assert problem_mask(img, "outside_brain").any()
+    assert export_problems(img, str(tmp_path / "a"), mni=False) == []
+    assert [e["id"] for e in export_problems(img, str(tmp_path / "b"))] == ["outside_brain"]
+
+
+def test_non_mni_fixes_still_fix_the_drawing():
+    m = _gappy()
+    plan = qc.fix_plan(S.img(m), mni=False)
+    assert [e["id"] for e in plan] == ["sparse_slices"]
