@@ -1,6 +1,115 @@
 # Changelog
 
-## 0.7.0 (unreleased)
+## 0.8.0
+
+About twice as fast, with every existing output unchanged, plus new tools that stay off until
+switched on. With none of the new options used, 0.8.0 reproduces 0.7.0 byte for byte (only
+timestamps and run times differ): 70 synthetic cases, 41 real Registry masks on 0.74 mm and 1 mm
+grids, group runs and the command line. Mask quality rules stay at version 1.2
+(`qc.QC_VERSION`), so cached QC results remain valid.
+
+### New (all opt-in; no existing output changes)
+- `lqtpy cache --prune` deletes the caches of older lqtpy versions on request (`lqtpy cache`
+  now shows how much they take); it never runs on its own and never touches this version's cache.
+- `lqtpy qc FILE --export-problems DIR` writes one overlay mask per finding (1 where the finding's
+  voxels are, on the lesion's own grid) to open in MRIcroGL or ITK-SNAP while fixing.
+  `lqtpy.qc_tools.export_problems()` is the same from Python.
+- `lqtpy doctor` checks an installation (packages, cache, disconnection index, SUIT atlas,
+  settings file, write access) and says how to fix each gap; it still runs when the settings file
+  is broken.
+- `lqtpy demo` makes a report for a synthetic lesion and opens it.
+- `--xlsx` (single and group): the run's tables and the data dictionary as one Excel workbook,
+  one sheet per table (needs `openpyxl`, extra `lqtpy[xlsx]`). The anonymisation key is never
+  included. `lqtpy.xlsx.write_workbook(folder)` does the same for any finished run.
+- `lqtpy.notebook.enable()`: prepared lesions, descriptions and QC results show as cards in
+  Jupyter; `disable()` goes back to plain text.
+- `lqtpy install-shortcut` (Windows): a "Send to > LQTpy report" entry in Explorer
+  (`--remove` deletes it).
+
+- `-j auto` / `n_jobs="auto"` / `jobs = "auto"` in lqtpy.toml: one process for fewer than 4
+  files, otherwise one worker per CPU less one (at most 8). One process stays the default. If
+  worker processes can't start, or a worker dies, the remaining files run in one process with a
+  one-line warning instead of failing (this applies to any `-j`).
+- `lqtpy.summary(lesion_or_result)`: one documented, versioned JSON summary
+  (`schema: "lqtpy.summary"`, `summary_version: "1.0"`) for programs that store lqtpy results.
+  Every key is always present (`null` when a part didn't run); no file paths.
+- `--flagged-voxels` (or `flagged_voxels=True`): the slice viewer gets a "Show flagged voxels"
+  switch, off when the report opens, colouring the voxels quality findings are about
+  (stray / missing / to look at).
+- `--qc-examples` (or `ReportStyle(qc_examples=True)`): a "What does this look like?" picture
+  of a made-up example under each quality finding that has one.
+- `lqtpy single MASK --per-label`: one report per label value of a multi-label mask, plus
+  `<name>_labels.csv`; `lqtpy.labels.split_labels()` / `analyze_labels()`. Without it labels are
+  merged into one lesion, as before.
+- `lqtpy group DATASET --bids`: lesion masks (`label-lesion` / `desc-lesion`) found in a BIDS
+  dataset, metadata from `participants.tsv`, and a BIDS derivative written to
+  `<dataset>/derivatives/lqtpy` (per-subject `_stats.tsv` tables in `space-MNI152NLin6Asym`,
+  `dataset_description.json`, `.bidsignore` for lqtpy's own reports).
+
+- For drawing tools and registries (MRLatte, the Lesion Registry), all opt-in:
+  - `lqtpy.capabilities()`: the lqtpy, QC-rules and summary versions and which features work
+    in this installation, in one cheap call. Feature names are only ever added.
+  - Advice in plain words: `finding.advice` and a stable `finding.action` name
+    (`interpolate_gaps`, `remove_specks`, ...; `lqtpy.qc_advice`), and
+    `QCResult.to_dict(advice=True)`. `suggestion` and the default JSON are unchanged.
+  - `qc.fix_plan(lesion)`: every fix lqtpy can make, each worked out on its own from the original
+    mask, with the voxels it would add and remove, for previews and one-at-a-time undo.
+  - `qc.Session`: a drawing kept in memory; send changed slices or voxels after each stroke and
+    `check()` returns the same result as checking a saved file, re-using the last one when nothing
+    changed (about 35 ms for a 20 cc lesion).
+  - `lqtpy.compare(a, b)`: volume change, Dice and Jaccard, centroid shift, and atlas regions
+    gained, lost and changed between two masks (follow-up scans, copies of one lesion).
+  - ANTs / ANTsPy transforms for `--transform`, `lqtpy warp` and `warp_to_mni`: the forward list
+    in ANTs order (`[…1Warp.nii.gz, …0GenericAffine.mat]`, repeat `--transform`), ITK `.mat` and
+    text affines (`lqtpy.ants`). A plain 4 x 4 text matrix named `.mat` still reads as before.
+  - Guide: `docs/INTEGRATION.md`.
+- `--per-label` refuses masks with more than 20 label values (a parcellation passed by mistake);
+  `--max-labels N` raises the limit.
+- `tools/golden.py`: records every output for a fixed set of inputs and compares two
+  recordings, to prove a change leaves outputs identical (`record`, `diff`; real masks only
+  from a folder you name, recorded under a hash).
+
+### Faster (same results)
+- **Glass-brain thumbnails** (`plotting.glass_brain_png`, used by the Lesion Registry) about
+  twice as fast: nilearn draws only the lesion's slab, then each panel gets back the full-size
+  picture, extent and limits before saving. The PNG bytes are identical: checked on 41 real
+  Registry masks and 87 synthetic ones in both themes (256 thumbnails). Oblique grids, and any
+  case that can't be restored exactly, are drawn whole as before.
+- **Start-up.** Atlas label volumes, template maps and the tract indices are kept uncompressed in
+  the disk cache and memory-mapped: `preload()` takes 0.07 s instead of 0.8 s, and worker
+  processes (`n_jobs`, the Registry's pool) share one copy of that data in memory. The cache now
+  takes about 250 MB per lqtpy version (`lqtpy cache`); it is built once per version, as before.
+- **Outline sensitivity** (`sensitivity` extra) about 10 times faster: the three redraws are
+  worked out in a box around the lesion instead of the whole padded grid, and are measured
+  without writing each into a full-size image.
+- **Resampling onto atlas grids:** for axis-aligned grids (the usual case) each axis is mapped on
+  its own and the lesion's box is read in one gather; the field-of-view count is skipped when the
+  lesion's box lies well inside the grid.
+- **Quality checks:** gap interpolation (grading, `repair_gaps`) and `qc.fix(…, ["holes"])` work
+  in the lesion's box instead of the whole grid; hole filling is one labelling pass and the
+  26-neighbour closing and erosions are array shifts (exactly scipy's results); a mask's pieces
+  are labelled once instead of once per axis; hole centres use exact integer sums.
+- **Locations:** key-structure distances map the lesion once per grid (2) instead of once per
+  structure (12); tract overlap and cross-sections look the lesion's voxels up in one sorted
+  index of all tract voxels instead of scanning all 80 tracts; streamline disconnection marks the
+  streamlines hit instead of sorting them; a one-part lesion's tissue lookup is done once.
+- **Loading:** integer masks are thresholded with integer comparisons, and the lesion's voxels
+  are found by reading only its box (grids from NIfTI files are in Fortran order, which made
+  numpy copy the whole grid first).
+- **Reports** embed their CSV tables from memory instead of reading back the files just written
+  (each file open costs about 1.5 ms on Windows).
+- **Glass-brain PNGs** (`plotting.glass_brain_png`): nilearn runs five full garbage collections
+  per figure; they now skip everything that existed before the call (`gc.freeze`), and one
+  collection afterwards frees the figure: the same image, 10–30% faster (more in a process
+  holding more), and less memory.
+- Fewer full-grid copies: morphometry no longer builds a uint8 copy of the mask to read the
+  header's voxel size, the brain mask is used as cached, the checksum of an in-memory mask is
+  built from its voxel list.
+
+### Fixed
+- `lqtpy cache` counts the files in the cache's subfolders.
+
+## 0.7.0 (2026-10-29)
 
 Faster everywhere, smaller, and three new drawing checks from notes on real masks. Mask
 quality rules version `qc.QC_VERSION` is now **1.2**: caches keyed on it re-run QC.

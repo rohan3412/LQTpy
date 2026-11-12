@@ -120,6 +120,20 @@ class Finding:
         return "at " + ", ".join(f"{v:.0f}" for v in loc["mm"]) + " mm"
 
     @property
+    def advice(self) -> str:
+        """Plain-words advice for the person fixing the mask
+        (:mod:`lqtpy.qc_advice`); ``suggestion`` is unchanged."""
+        from .qc_advice import advice_for
+        return advice_for(self)["text"]
+
+    @property
+    def action(self) -> str:
+        """Stable action name for a tool's button, e.g. ``"interpolate_gaps"``
+        (:mod:`lqtpy.qc_advice`)."""
+        from .qc_advice import advice_for
+        return advice_for(self)["action"]
+
+    @property
     def label(self) -> str:
         """'Check, moderate' / 'Problem, major' / 'Note'."""
         from . import _format as fmt
@@ -222,11 +236,18 @@ class QCResult:
         tool asks before interrupting its user. Notes alone never do."""
         return any(f.severity != INFO for f in self.findings)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, *, advice: bool = False) -> dict:
+        """JSON-ready form. ``advice=True`` adds ``advice`` (``{"action", "text",
+        "fix_id", "adds_voxels"}``, :mod:`lqtpy.qc_advice`) to every finding."""
+        if advice:
+            from .qc_advice import advice_for
+            found = [{**f.to_dict(), "advice": advice_for(f)} for f in self.findings]
+        else:
+            found = [f.to_dict() for f in self.findings]
         return {"schema": "lqtpy.qc", "qc_version": self.qc_version, "tier": self.tier,
                 "verdict": self.verdict, "score": self.score, "worst": self.worst,
                 "needs_attention": self.needs_attention,
-                "findings": [f.to_dict() for f in self.findings], "context": self.context,
+                "findings": found, "context": self.context,
                 "options": self.options, "seconds": round(self.seconds, 3), "source": self.source}
 
     def to_json(self, **kw) -> str:

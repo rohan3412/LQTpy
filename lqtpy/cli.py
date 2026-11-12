@@ -13,7 +13,10 @@
     lqtpy fetch    suit                       download an optional atlas
     lqtpy new-plugin NAME                     starter package for an extra measure
     lqtpy config                              show the settings file in use
-    lqtpy cache    [--clear]                  where template maps are cached
+    lqtpy cache    [--clear|--prune]          where template maps are cached
+    lqtpy doctor                              check this installation
+    lqtpy demo                                report for a made-up lesion
+    lqtpy install-shortcut                    Windows "Send to" entry that makes a report
 
 Defaults come from ``lqtpy.toml`` (see :mod:`lqtpy.config`); options on the
 command line win. Errors print one line and exit with 2 (a problem with
@@ -38,6 +41,21 @@ def _table_atlases() -> "list[str]":
     return [a for a in list_atlases() if a != "tissue"]
 
 
+def _transform(t):
+    """One --transform stays a path (as before); several are an ANTs list."""
+    if not t:
+        return None
+    return t[0] if len(t) == 1 else list(t)
+
+
+def _jobs_arg(value):
+    from ._jobs import parse_jobs
+    try:
+        return parse_jobs(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def _add_analysis(p, cfg, *, group: bool):
     from .atlases import DEFAULT_ATLASES
     atl = cfg.get("atlases") or DEFAULT_ATLASES
@@ -58,6 +76,12 @@ def _add_analysis(p, cfg, *, group: bool):
     p.add_argument("--no-qc", action="store_true", help="Skip mask quality checks.")
     p.add_argument("--no-describe", action="store_true", help="Skip the written description.")
     p.add_argument("--no-viewer", action="store_true", help="Leave out the slice viewer (smaller report).")
+    p.add_argument("--qc-examples", action="store_true",
+                   help='Add a "What does this look like?" example picture under each quality '
+                        "finding in the report.")
+    p.add_argument("--flagged-voxels", action="store_true",
+                   help='Add a "Show flagged voxels" switch to the slice viewer (off when the '
+                        "report opens): the voxels quality findings are about, in colour.")
     p.add_argument("--anonymise", "--anonymize", nargs="?", const=True,
                    default=cfg.get("anonymise", False), metavar="KEY_FILE",
                    help="Write IDs instead of file names everywhere; the private key file "
@@ -65,6 +89,9 @@ def _add_analysis(p, cfg, *, group: bool):
     p.add_argument("--quiet", "-q", action="store_true", help="Print only the report path.")
     p.add_argument("--pdf", action="store_true", default=cfg.get("pdf", False),
                    help="Also save the report as PDF (needs Edge/Chrome/Chromium).")
+    p.add_argument("--xlsx", action="store_true",
+                   help="Also write the tables and the data dictionary as one Excel workbook "
+                        "(needs openpyxl).")
     if group:
         p.add_argument("--pdf-bundle", action="store_true",
                        help="PDFs of the group and every subject, merged into one with bookmarks "
@@ -80,18 +107,30 @@ def _add_analysis(p, cfg, *, group: bool):
         p.add_argument("--side-column", default="auto",
                        help='Metadata column with the lesion (or symptom) side for the flip check; '
                             '"auto" finds one, "none" turns it off.')
-        p.add_argument("--jobs", "-j", type=int, default=cfg.get("jobs", 1),
-                       help="Worker processes (-1: one per CPU). Default %(default)s.")
+        p.add_argument("--jobs", "-j", type=_jobs_arg, default=cfg.get("jobs", 1),
+                       help='Worker processes (-1: one per CPU; "auto": one process for a few '
+                            'files, else one per CPU less one). Default %(default)s.')
+        p.add_argument("--bids", action="store_true",
+                       help="The folder is a BIDS dataset: find its lesion masks (label-lesion / "
+                            "desc-lesion), take metadata from participants.tsv, and write a BIDS "
+                            "derivative (default <dataset>/derivatives/lqtpy).")
         p.add_argument("--incremental", action="store_true",
                        help="Reuse results from an earlier run into the same folder for unchanged files.")
     else:
+        p.add_argument("--per-label", action="store_true",
+                       help="A mask with several label values: one report per label "
+                            "(default: the labels are merged into one lesion).")
+        p.add_argument("--max-labels", type=int, default=20, metavar="N",
+                       help="--per-label: refuse masks with more than N label values (default 20).")
         p.add_argument("--expected-side", choices=("left", "right"),
                        help="Flag the lesion if most of it is on the other side.")
         p.add_argument("--native", help="The same lesion as a native-space mask: drawing checks "
                                         "(gaps, single slice, outline) run on it.")
-        p.add_argument("--transform", help="LESION is a native-space mask: warp it to MNI with this "
-                                           "4x4 matrix (text file, native mm -> MNI mm) or "
-                                           "deformation field, then analyse.")
+        p.add_argument("--transform", action="append",
+                       help="LESION is a native-space mask: warp it to MNI with this "
+                            "4x4 matrix (text file, native mm -> MNI mm), deformation field, "
+                            "or ANTs transforms (repeat in ANTs order: --transform 1Warp.nii.gz "
+                            "--transform 0GenericAffine.mat), then analyse.")
 
 
 def build_parser(cfg: "dict | None" = None) -> argparse.ArgumentParser:
@@ -139,8 +178,11 @@ def build_parser(cfg: "dict | None" = None) -> argparse.ArgumentParser:
                         "full (default): everything.")
     q.add_argument("--context", metavar="JSON_FILE",
                    help="Drawing context from a drawing tool (drawn slices, drawing plane, base).")
-    q.add_argument("--jobs", "-j", type=int, default=cfg.get("jobs", 1),
-                   help="Folder: worker processes.")
+    q.add_argument("--jobs", "-j", type=_jobs_arg, default=cfg.get("jobs", 1),
+                   help='Folder (with --json): worker processes, or "auto".')
+    q.add_argument("--export-problems", metavar="DIR",
+                   help="Lesion file: write one overlay mask per finding into DIR, to open over "
+                        "the lesion in MRIcroGL or ITK-SNAP while fixing.")
 
     c = sub.add_parser("clean", help="Remove image-edge artefacts and specks into a new mask (opt-in).")
     c.add_argument("lesion")
@@ -157,8 +199,9 @@ def build_parser(cfg: "dict | None" = None) -> argparse.ArgumentParser:
 
     w = sub.add_parser("warp", help="Warp a native-space mask to MNI.")
     w.add_argument("lesion")
-    w.add_argument("--transform", required=True,
-                   help="4x4 matrix text file (native mm -> MNI mm, RAS) or deformation field image.")
+    w.add_argument("--transform", required=True, action="append",
+                   help="4x4 matrix text file (native mm -> MNI mm, RAS), deformation field image, "
+                        "or ANTs transforms (repeat in ANTs order).")
     w.add_argument("--out", "-o", required=True, help="Path for the MNI .nii.gz")
     w.add_argument("--threshold", "-t", type=float, default=0.5)
 
@@ -177,7 +220,7 @@ def build_parser(cfg: "dict | None" = None) -> argparse.ArgumentParser:
     wa.add_argument("--interval", type=float, default=10.0, help="Seconds between checks (default 10).")
     wa.add_argument("--metadata", "-m")
     wa.add_argument("--profile", choices=_PROFILES, default=cfg.get("profile", "stroke"))
-    wa.add_argument("--jobs", "-j", type=int, default=cfg.get("jobs", 1))
+    wa.add_argument("--jobs", "-j", type=_jobs_arg, default=cfg.get("jobs", 1))
 
     sv = sub.add_parser("serve", help="Upload page: colleagues get a report without Python.")
     sv.add_argument("--host", default="127.0.0.1",
@@ -195,7 +238,17 @@ def build_parser(cfg: "dict | None" = None) -> argparse.ArgumentParser:
 
     sub.add_parser("config", help="Show the settings file in use and its values.")
     ca = sub.add_parser("cache", help="Show (or clear) the template-map cache.")
-    ca.add_argument("--clear", action="store_true")
+    ca.add_argument("--clear", action="store_true", help="Delete this version's cache.")
+    ca.add_argument("--prune", action="store_true",
+                    help="Delete the caches of older lqtpy versions (never this one's).")
+
+    sub.add_parser("doctor", help="Check this installation and say how to fix each gap.")
+    dm = sub.add_parser("demo", help="Make a report for a synthetic lesion and open it.")
+    dm.add_argument("--out", "-o", help="Output folder (default: a temporary folder).")
+    dm.add_argument("--no-open", action="store_true", help="Don't open the report in the browser.")
+    sc = sub.add_parser("install-shortcut",
+                        help="Windows: add a 'Send to' entry in Explorer that makes a report.")
+    sc.add_argument("--remove", action="store_true", help="Remove the entry again.")
     return p
 
 
@@ -207,6 +260,11 @@ def _out_dir(args, cfg, name):
     return None
 
 
+def _examples_style():
+    from .report.style import ReportStyle
+    return ReportStyle(qc_examples=True)
+
+
 def _analysis_kwargs(args, cfg) -> dict:
     extras = None if args.extras in (None, "", "none") else args.extras
     return dict(atlases=args.atlas or cfg.get("atlases"), threshold=args.threshold,
@@ -214,7 +272,10 @@ def _analysis_kwargs(args, cfg) -> dict:
                 verbose=not args.quiet, qc=not args.no_qc, describe=not args.no_describe,
                 profile=args.profile, extras=extras,
                 disconnection=False if (args.no_disconnection or cfg.get("disconnection") is False) else "auto",
-                viewer=not args.no_viewer and cfg.get("viewer", True), anonymise=args.anonymise)
+                viewer=not args.no_viewer and cfg.get("viewer", True),
+                flagged_voxels=args.flagged_voxels,
+                anonymise=args.anonymise,
+                **({"report_style": _examples_style()} if args.qc_examples else {}))
 
 
 def _run(args, cfg) -> int:
@@ -222,13 +283,48 @@ def _run(args, cfg) -> int:
     if args.cmd in ("single", "group"):
         from .analysis import analyze_group, analyze_single
         kw = _analysis_kwargs(args, cfg)
+        if args.cmd == "single" and args.per_label:
+            from .formats import strip_extension
+            from .labels import analyze_labels
+            if args.native or args.transform:
+                raise ValueError("--per-label works on MNI masks (not with --native or --transform)")
+            name = strip_extension(os.path.basename(args.lesion))
+            out = analyze_labels(args.lesion, out_dir=_out_dir(args, cfg, name), name=name,
+                                 max_labels=args.max_labels,
+                                 expected_side=args.expected_side, pdf=args.pdf, **kw)
+            for v, r in out["labels"].items():
+                if args.xlsx and r.get("report_path"):
+                    from .xlsx import write_workbook
+                    write_workbook(os.path.dirname(r["report_path"]))
+                print(_term.path(r["report_path"]) if args.quiet else
+                      f"label {v}: {_term.path(r.get('report_path', ''))}")
+            if not args.quiet and out["index_path"]:
+                print(f"Index of labels: {_term.path(out['index_path'])}")
+            return 0
         if args.cmd == "single":
             from .formats import strip_extension
             res = analyze_single(args.lesion, out_dir=_out_dir(args, cfg, strip_extension(
                 os.path.basename(args.lesion))), expected_side=args.expected_side, pdf=args.pdf,
-                native=args.native, transform=args.transform, **kw)
+                native=args.native, transform=_transform(args.transform), **kw)
         else:
             inp = args.lesions[0] if len(args.lesions) == 1 else args.lesions
+            bids_masks = None
+            if args.bids:
+                from . import bids
+                if len(args.lesions) != 1 or not os.path.isdir(args.lesions[0]):
+                    raise ValueError("--bids takes one folder: the BIDS dataset")
+                if args.anonymise:
+                    raise ValueError("--bids keeps the dataset's sub-<id> names; "
+                                     "leave out --anonymise")
+                root = args.lesions[0]
+                if not args.out:
+                    args.out = os.path.join(root, "derivatives", "lqtpy")
+                bids_masks = bids.find_masks(root, exclude=args.out)
+                if not bids_masks:
+                    raise ValueError(f"no lesion masks (label-lesion, desc-lesion) found in {root}")
+                inp = [(n, path) for n, path, _ in bids_masks]
+                if not args.metadata:
+                    args.metadata = bids.participants(root, bids_masks) or None
             compare = None
             if args.compare:
                 if len(args.compare) not in (1, 3):
@@ -241,6 +337,18 @@ def _run(args, cfg) -> int:
                                 group_by=args.group_by, compare=compare,
                                 side_column=None if args.side_column == "none" else args.side_column,
                                 n_jobs=args.jobs, incremental=args.incremental, **kw)
+            if bids_masks is not None:
+                from . import bids
+                files = bids.write_derivatives(args.lesions[0], args.out, bids_masks, res)
+                if not args.quiet:
+                    print(f"BIDS derivative: {_term.path(args.out)}  ({len(files)} files)")
+        if args.xlsx:
+            from .xlsx import write_workbook
+            if not res.get("report_path"):
+                raise ValueError("--xlsx needs the tables the run writes (not with plots off)")
+            book = write_workbook(os.path.dirname(res["report_path"]))
+            if not args.quiet:
+                print(f"Excel workbook: {_term.path(book)}")
         if args.quiet:
             print(_term.path(res.get("report_path", "")) if res.get("report_path") else "(no report written)")
         return 0
@@ -260,6 +368,14 @@ def _run(args, cfg) -> int:
                 ctx = _json.load(fh)
         kw = {} if args.tier == "header" else dict(threshold=args.threshold,
                                                     expected_side=args.expected_side, context=ctx)
+        if args.export_problems:
+            from .qc_tools import export_problems
+            files = export_problems(args.lesion, args.export_problems, threshold=args.threshold,
+                                    context=ctx)
+            for f in files:
+                print(f"{f['id']:<14} {f['kind']:<8} {f['voxels']:>9,} voxels  {_term.path(f['path'])}")
+            if not files:
+                print("No finding marks voxels: nothing to export.")
         res = qc.assess(args.lesion, tier=args.tier, **kw)
         if args.json:
             text = res.to_json(indent=1)
@@ -313,7 +429,7 @@ def _run(args, cfg) -> int:
         import nibabel as nib
         from .native import warp_to_mni
         _refuse_overwrite(args.lesion, args.out)
-        img = warp_to_mni(args.lesion, args.transform, threshold=args.threshold)
+        img = warp_to_mni(args.lesion, _transform(args.transform), threshold=args.threshold)
         nib.save(img, args.out)
         print(f"Wrote {_term.path(args.out)}")
         return 0
@@ -353,15 +469,53 @@ def _run(args, cfg) -> int:
             if k != "_path":
                 _term.field(k, str(v))
         return 0
+    if args.cmd == "doctor":
+        from .doctor import run_checks
+        checks = run_checks()
+        for status, what, fix in checks:
+            _term.field(_term.quality({"ok": "ok", "note": "info", "problem": "error"}[status]),
+                        what + (_term.paint(f"  -> {fix}", "dim") if fix else ""))
+        bad = sum(1 for c in checks if c[0] == "problem")
+        notes = sum(1 for c in checks if c[0] == "note")
+        print(f"\n{bad} problem(s), {notes} optional part(s) missing.")
+        return 1 if bad else 0
+    if args.cmd == "demo":
+        from .demo import make_demo
+        report = make_demo(args.out, open_browser=not args.no_open, verbose=False)
+        print(f"Demo report (a made-up lesion): {_term.path(report)}")
+        return 0
+    if args.cmd == "install-shortcut":
+        from . import shortcut
+        if args.remove:
+            gone = shortcut.remove()
+            print(f"Removed {_term.path(gone)}" if gone else "No Send to entry to remove.")
+        else:
+            print(f"Added {_term.path(shortcut.install())}\n"
+                  "Right-click a lesion file > Send to > LQTpy report.")
+        return 0
     if args.cmd == "cache":
         from . import _diskcache
         d = _diskcache.cache_dir()
-        if args.clear:
+        if args.prune:
+            gone = _diskcache.prune()
+            if not d:
+                print("The disk cache is off.")
+            elif not gone:
+                print("No caches of older lqtpy versions to remove.")
+            else:
+                for p, size in gone:
+                    print(f"Removed {_term.path(p)}  ({size / 2**20:.0f} MB)")
+                print(f"Freed {sum(s for _, s in gone) / 2**20:.0f} MB.")
+        elif args.clear:
             _diskcache.clear()
             print(f"Cleared {_term.path(d)}" if d else "The disk cache is off.")
         else:
-            size = sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d)) if d and os.path.isdir(d) else 0
+            size = _diskcache._tree_size(d) if d and os.path.isdir(d) else 0
             print(f"{_term.path(d)}  ({size / 2**20:.0f} MB)" if d else "The disk cache is off (LQTPY_NO_DISK_CACHE).")
+            old = _diskcache.old_versions()
+            if old:
+                print(f"Caches of {len(old)} older version(s): {sum(s for _, s in old) / 2**20:.0f} MB. "
+                      f"`lqtpy cache --prune` removes them.")
         return 0
     raise AssertionError(args.cmd)
 
@@ -432,8 +586,10 @@ def main(argv=None) -> int:
         cfg, used = load_config(cfg_path)
         cfg["_path"] = used
     except (ValueError, OSError) as exc:
-        print(f"lqtpy: settings file: {exc}", file=sys.stderr)
-        return 2
+        if "doctor" not in argv:           # doctor reports a bad settings file instead
+            print(f"lqtpy: settings file: {exc}", file=sys.stderr)
+            return 2
+        cfg = {"_path": None}
     args = build_parser(cfg).parse_args(argv)
     try:
         return _run(args, cfg)

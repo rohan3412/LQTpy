@@ -110,6 +110,9 @@ class ReportStyle:
 
     # 4. Detail-level preset.
     detail: str = "standard"        # "summary" | "standard" | "full"
+    #: Standalone report: a "What does this look like?" picture under each
+    #: quality finding that has one (opt-in).
+    qc_examples: bool = False
 
     def __post_init__(self) -> None:
         for name in ("accent", "text", "muted_text", "border", "surface", "row_stripe"):

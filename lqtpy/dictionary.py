@@ -128,13 +128,22 @@ def write_dictionary(out_dir: str, files: "dict[str, list[str]]",
                      extra: "dict[str, tuple[str, str]] | None" = None) -> str:
     """Write ``data_dictionary.csv`` for ``{file name: [columns]}``;
     ``extra`` describes columns not in :data:`COLUMNS` (metadata)."""
-    extra = extra or {}
     path = os.path.join(out_dir, "data_dictionary.csv")
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh)
-        w.writerow(["File", "Column", "Unit", "Meaning"])
-        for f, cols in files.items():
-            for c in cols:
-                unit, meaning = COLUMNS.get(c) or extra.get(c) or ("", "")
-                w.writerow([f, c, unit, meaning])
+    with open(path, "wb") as fh:
+        fh.write(dictionary_csv(files, extra))
     return path
+
+
+def dictionary_csv(files: "dict[str, list[str]]",
+                   extra: "dict[str, tuple[str, str]] | None" = None) -> bytes:
+    """The bytes :func:`write_dictionary` writes."""
+    import io
+    extra = extra or {}
+    buf = io.StringIO(newline="")
+    w = csv.writer(buf)
+    w.writerow(["File", "Column", "Unit", "Meaning"])
+    for f, cols in files.items():
+        for c in cols:
+            unit, meaning = COLUMNS.get(c) or extra.get(c) or ("", "")
+            w.writerow([f, c, unit, meaning])
+    return buf.getvalue().encode("utf-8")

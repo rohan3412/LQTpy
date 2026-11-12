@@ -60,7 +60,8 @@ from .prepared import PreparedLesion, prepare
 __all__ = ["Flag", "Finding", "QCResult", "DrawingContext", "QC_VERSION", "check", "assess",
            "gap_evidence", "clusters", "repair_gaps", "clean", "brain_mask", "slice_axis_names",
            "DEFAULTS", "check_folder", "clean_folder", "problem_mask", "fix", "assess_folder",
-           "rank", "assess_header", "recognise_grid", "PROBLEM_KIND", "FIXABLE"]
+           "rank", "assess_header", "recognise_grid", "PROBLEM_KIND", "FIXABLE", "fix_plan",
+           "Session"]
 
 INFO, WARN, ERROR = "info", "warn", "error"
 _SEVERITY_ORDER = {ERROR: 0, WARN: 1, INFO: 2}
@@ -157,7 +158,7 @@ def brain_mask():
     from .atlases import load_atlas
     dk = load_atlas("dk")
     f = cached_arrays("brain_mask", lambda: {"mask": _build_brain(dk, load_atlas("aal"))})["mask"]
-    out = (f.astype(bool), np.asarray(dk.img.affine, float))
+    out = (np.asarray(f, dtype=bool), np.asarray(dk.img.affine, float))
     out[0].flags.writeable = False
     return out
 
@@ -171,9 +172,8 @@ def _build_brain(dk, aal):
     am = _nearest_on_grid(a, np.asarray(aal.img.affine, float),
                           (tuple(nz.min(0)), tuple(nz.max(0) + 1)),
                           d.shape, np.asarray(dk.img.affine, float))
-    f = ndimage.binary_fill_holes(m | am)
-    for z in range(f.shape[2]):   # close sulcal CSF gaps slice by slice
-        f[:, :, z] = ndimage.binary_fill_holes(f[:, :, z])
+    from ._morph import fill_holes
+    f = fill_holes(fill_holes(m | am), axis=2)    # then sulcal CSF gaps, slice by slice
     return ndimage.binary_dilation(f, iterations=2)
 
 
@@ -248,13 +248,18 @@ def _analysis_mask(p: PreparedLesion, opts, *, drop_specks: bool = True) -> np.n
     """The lesion's padded-bbox mask without image-edge artefacts (and,
     by default, without specks): what the shape-based detectors look at.
     The outline detector keeps specks, since a warped outline breaks into
-    speck-sized pieces."""
+    speck-sized pieces. Cached on the lesion, read-only."""
     from .morphometry import components
-    labels, _, sizes = components(p)
-    keep = np.zeros(len(sizes) + 1, bool)
-    keep[1:] = (sizes * _voxel_mm3(p) >= opts["speck_mm3"]) if drop_specks else True
-    keep[_edge_components(p)] = False
-    return keep[labels]
+
+    def build():
+        labels, _, sizes = components(p)
+        keep = np.zeros(len(sizes) + 1, bool)
+        keep[1:] = (sizes * _voxel_mm3(p) >= opts["speck_mm3"]) if drop_specks else True
+        keep[_edge_components(p)] = False
+        out = keep[labels]
+        out.flags.writeable = False
+        return out
+    return p.cached(("analysis_mask", opts["speck_mm3"] if drop_specks else None), build)
 
 
 def _extent(sub: np.ndarray, axis: int) -> int:
@@ -406,6 +411,7 @@ def gap_evidence(lesion, opts=None) -> "dict | None":
     _, lo, _ = components(p)
     names = slice_axis_names(p.affine)
     best = None
+    pieces = []          # the mask's pieces, labelled on first use (the same for every axis)
     for ax in range(3):
         mm = _axis_mm(p, ax)
         max_run = max(1, int(round(opts["gap_max_mm"] / mm)))
@@ -416,7 +422,9 @@ def gap_evidence(lesion, opts=None) -> "dict | None":
             wide = min(_extent(sub, a) * _axis_mm(p, a) for a in range(3) if a != ax)
             if wide >= opts["flat_plate_min_ratio"] * span:
                 continue    # everything within one thin, wide slab: a single-slice drawing (flat)
-        slabs = _slab_ratio(sub, ax)
+        if not pieces:
+            pieces.append(_pieces(sub))
+        slabs = _slab_ratio(sub, ax, pieces[0])
         ev.update(axis=ax, plane=names[ax], slab_ratio=slabs)
         # Pieces along this axis that are round, separate lesions -- unless
         # the pieces are thin slabs stacked with gaps between them, or a
@@ -445,16 +453,24 @@ def gap_evidence(lesion, opts=None) -> "dict | None":
     return best
 
 
-def _slab_ratio(sub: np.ndarray, axis: int) -> "float | None":
-    """Size-weighted mean over pieces of (extent along ``axis``) / (smaller
-    in-plane extent), in voxels: ~0.2-0.4 for the slabs of a gapped drawing,
-    ~1 for round lesions. ``None`` for a single piece."""
+def _pieces(sub: np.ndarray):
+    """``(n, sizes, boxes)`` of the 26-connected pieces of ``sub``."""
     lab, n = ndimage.label(sub, structure=_S26)
     if n < 2:
+        return n, None, None
+    return n, np.bincount(lab.ravel())[1:], ndimage.find_objects(lab)
+
+
+def _slab_ratio(sub: np.ndarray, axis: int, pieces=None) -> "float | None":
+    """Size-weighted mean over pieces of (extent along ``axis``) / (smaller
+    in-plane extent), in voxels: ~0.2-0.4 for the slabs of a gapped drawing,
+    ~1 for round lesions. ``None`` for a single piece. ``pieces``:
+    :func:`_pieces` of ``sub``, when already known."""
+    n, sizes, boxes = _pieces(sub) if pieces is None else pieces
+    if n < 2:
         return None
-    sizes = np.bincount(lab.ravel())[1:]
     ratios = []
-    for sl in ndimage.find_objects(lab):
+    for sl in boxes:
         ext = [s.stop - s.start for s in sl]
         inplane = min(e for a, e in enumerate(ext) if a != axis)
         ratios.append(ext[axis] / max(inplane, 1))
@@ -717,17 +733,13 @@ def _hollow(sub: np.ndarray):
     interior_frac = float(ndimage.binary_erosion(sub).sum()) / n
     if interior_frac >= 0.2:          # clearly solid: skip the expensive part
         return 0.0, interior_frac, None
+    from ._morph import fill_holes
     best, best_ax = 0.0, None
     for it in (2, 3):
         d = ndimage.binary_dilation(np.pad(sub, it + 1), iterations=it)
         base = int(d.sum())
         for ax in range(3):
-            filled = np.zeros_like(d)
-            for k in range(d.shape[ax]):
-                sl = [slice(None)] * 3
-                sl[ax] = k
-                filled[tuple(sl)] = ndimage.binary_fill_holes(d[tuple(sl)])
-            gain = (int(filled.sum()) - base) / base
+            gain = (int(fill_holes(d, axis=ax).sum()) - base) / base
             if gain > best:
                 best, best_ax = gain, ax
     return best, interior_frac, best_ax
@@ -965,15 +977,11 @@ def _partial_gap_voxels(lesion, *, threshold: float = 0.5, **options) -> np.ndar
 def _filled_volume(sub: np.ndarray, axis: int) -> int:
     """Voxels an outline encloses (close, fill slice by slice along
     ``axis``, then undo the closing), for the hollow finding's extent."""
+    from ._morph import fill_holes
     best = int(sub.sum())
     for it in (2, 3):
         d = ndimage.binary_dilation(np.pad(sub, it + 1), iterations=it)
-        f = np.zeros_like(d)
-        for k in range(d.shape[axis]):
-            sl = [slice(None)] * 3
-            sl[axis] = k
-            f[tuple(sl)] = ndimage.binary_fill_holes(d[tuple(sl)])
-        f = ndimage.binary_erosion(f, iterations=it) | np.pad(sub, it + 1)
+        f = ndimage.binary_erosion(fill_holes(d, axis=axis), iterations=it) | np.pad(sub, it + 1)
         best = max(best, int(f.sum()))
     return best
 
@@ -1474,7 +1482,6 @@ def repair_gaps(lesion, *, axis: "int | None" = None, max_gap_mm: "float | None"
     import nibabel as nib
 
     p = prepare(lesion, threshold)
-    names = slice_axis_names(p.affine)
     if axis is None:
         ev = gap_evidence(p)
         if ev is None:
@@ -1484,13 +1491,33 @@ def repair_gaps(lesion, *, axis: "int | None" = None, max_gap_mm: "float | None"
         axis = ev["axis"]
         if slices is None:
             slices = gap_slices_only(ev)
+    rep, box, filled = _gap_repair(p, axis, max_gap_mm, slices)
+    out = p.mask.copy()
+    out[box] = filled
+    return nib.Nifti1Image(out.astype(np.uint8), p.affine), rep
+
+
+def _gap_repair(p: PreparedLesion, axis: int, max_gap_mm, slices):
+    """:func:`repair_gaps` on the lesion's box: ``(report, box, filled)``,
+    ``filled`` being the repaired mask inside ``box`` (slices of the grid).
+    The box spans the drawn slices along ``axis`` and one voxel more across
+    it, which holds everything the interpolation reads or adds: new voxels
+    lie inside the two drawn slices' outlines, and the distance maps match
+    the whole slices' there (their nearest outside voxel is in the box)."""
+    names = slice_axis_names(p.affine)
     max_gap_mm = DEFAULTS["gap_long_mm"] if max_gap_mm is None else max_gap_mm
-    mask = np.moveaxis(p.mask.copy(), axis, 0)
+    lo = [max(0, a - 1) for a in p.bbox[0]]
+    hi = [min(s, b + 1) for s, b in zip(p.shape, p.bbox[1])]
+    lo[axis], hi[axis] = p.bbox[0][axis], p.bbox[1][axis]
+    box = tuple(slice(int(a), int(b)) for a, b in zip(lo, hi))
+    mask = np.moveaxis(p.mask[box], axis, 0)
+    out = mask.copy()
+    n = mask.shape[0]
+    filled_slices = 0
     if slices is not None:
-        out = mask.copy()
-        n = mask.shape[0]
-        want = {k for k in slices if 0 <= k < n}
-        filled_slices = 0
+        # Slices beyond the drawn ones have nothing on one side to
+        # interpolate from, so only those inside the box can change.
+        want = {k - lo[axis] for k in slices if lo[axis] <= k < hi[axis]}
         for k0, k1 in _runs(np.isin(np.arange(n), sorted(want))):
             a, b = k0 - 1, k1                    # nearest drawn slices either side
             while a >= 0 and not mask[a].any():
@@ -1505,41 +1532,34 @@ def repair_gaps(lesion, *, axis: "int | None" = None, max_gap_mm: "float | None"
                 new = ((1 - t) * da + t * db) <= 0
                 filled_slices += int(np.any(new & ~out[k]))
                 out[k] |= new
-        out = np.moveaxis(out, 0, axis)
-        added = int(out.sum()) - p.n_voxels
-        return (nib.Nifti1Image(out.astype(np.uint8), p.affine),
-                {"repaired": added > 0, "axis": int(axis), "plane": names[axis],
-                 "slices_interpolated": filled_slices, "voxels_added": added,
-                 "volume_added_mm3": round(added * _voxel_mm3(p), 1), "method": "gap slices"})
-    prof = mask.reshape(mask.shape[0], -1).sum(1).astype(float)
-    # Key slices = the core of each drawn slab: local maxima of the area
-    # profile. After an MNI warp a drawn slice is a slab whose edges taper,
-    # so interpolating between the tapered edges would add almost nothing;
-    # interpolating between cores rebuilds the missing volume.
-    n = prof.size
-    keys = [k for k in range(n) if prof[k] > 0
-            and prof[k] >= (prof[k - 1] if k > 0 else 0)
-            and prof[k] > (prof[k + 1] if k < n - 1 else 0)]
-    # Cores can be at most two gaps plus a slab apart.
-    max_span = max(2, int(round(2 * max_gap_mm / _axis_mm(p, axis))))
-    out = mask.copy()
-    filled_slices = 0
-    for a, b in zip(keys[:-1], keys[1:]):
-        g = b - a - 1
-        if g < 1 or g > max_span:
-            continue
-        da, db = _sdt(mask[a]), _sdt(mask[b])
-        for k in range(1, g + 1):
-            t = k / (g + 1)
-            new = ((1 - t) * da + t * db) <= 0
-            filled_slices += int(np.any(new & ~out[a + k]))
-            out[a + k] |= new
-    out = np.moveaxis(out, 0, axis)
-    added = int(out.sum()) - p.n_voxels
-    img = nib.Nifti1Image(out.astype(np.uint8), p.affine)
-    return img, {"repaired": added > 0, "axis": int(axis), "plane": names[axis],
-                 "slices_interpolated": filled_slices, "voxels_added": added,
-                 "volume_added_mm3": round(added * _voxel_mm3(p), 1), "method": "slab cores"}
+        method = "gap slices"
+    else:
+        prof = mask.reshape(n, -1).sum(1).astype(float)
+        # Key slices = the core of each drawn slab: local maxima of the area
+        # profile. After an MNI warp a drawn slice is a slab whose edges taper,
+        # so interpolating between the tapered edges would add almost nothing;
+        # interpolating between cores rebuilds the missing volume.
+        keys = [k for k in range(n) if prof[k] > 0
+                and prof[k] >= (prof[k - 1] if k > 0 else 0)
+                and prof[k] > (prof[k + 1] if k < n - 1 else 0)]
+        # Cores can be at most two gaps plus a slab apart.
+        max_span = max(2, int(round(2 * max_gap_mm / _axis_mm(p, axis))))
+        for a, b in zip(keys[:-1], keys[1:]):
+            g = b - a - 1
+            if g < 1 or g > max_span:
+                continue
+            da, db = _sdt(mask[a]), _sdt(mask[b])
+            for k in range(1, g + 1):
+                t = k / (g + 1)
+                new = ((1 - t) * da + t * db) <= 0
+                filled_slices += int(np.any(new & ~out[a + k]))
+                out[a + k] |= new
+        method = "slab cores"
+    added = int(np.count_nonzero(out)) - int(np.count_nonzero(mask))
+    return ({"repaired": added > 0, "axis": int(axis), "plane": names[axis],
+             "slices_interpolated": filled_slices, "voxels_added": added,
+             "volume_added_mm3": round(added * _voxel_mm3(p), 1), "method": method},
+            box, np.moveaxis(out, 0, axis))
 
 
 # --------------------------------------------------------------------------- #
@@ -1687,6 +1707,7 @@ def clean_folder(src, dst, *, specks: bool = True, edge: bool = True, threshold:
 
 
 # Helpers for tools built on lqtpy (see lqtpy.qc_tools and lqtpy.qc_grade).
-from .qc_tools import (FIXABLE, PROBLEM_KIND, assess_folder, fix, problem_mask,  # noqa: E402
-                       rank)
+from .qc_tools import (FIXABLE, PROBLEM_KIND, assess_folder, fix, fix_plan,  # noqa: E402
+                       problem_mask, rank)
 from .qc_grade import assess_header, recognise_grid  # noqa: E402
+from .qc_session import Session  # noqa: E402

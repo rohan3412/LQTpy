@@ -25,6 +25,9 @@ Transforms (``transform=``):
   every MNI voxel, the native world coordinate (mm, RAS) it comes from:
   the convention of SPM's ``y_*.nii`` "inverse" fields. Shape (X, Y, Z, 3)
   or (X, Y, Z, 1, 3).
+- **ANTs / ANTsPy** transforms: the forward list, in ANTs order
+  (``registration(...)["fwdtransforms"]``: ``[…1Warp.nii.gz, …0GenericAffine.mat]``),
+  or one ANTs file. See :mod:`lqtpy.ants`.
 """
 from __future__ import annotations
 
@@ -36,15 +39,23 @@ from scipy import ndimage
 
 from .errors import GeometryError, InvalidLesionError
 
-__all__ = ["warp_to_mni", "load_transform", "DRAWING_CHECKS", "native_qc"]
+__all__ = ["warp_to_mni", "load_transform", "DRAWING_CHECKS", "native_qc", "TRANSFORM_FORMATS"]
+
+#: What ``transform=`` accepts (see the module docstring).
+TRANSFORM_FORMATS = ("matrix", "deformation_field", "ants")
 
 #: QC checks that describe the drawing itself, and so read best natively.
 DRAWING_CHECKS = ("sparse_slices", "flat", "hollow", "specks")
 
 
 def load_transform(transform):
-    """``("affine", 4x4)`` or ``("field", image)`` from an array, a text
-    file, or an image path/object."""
+    """``("affine", 4x4)``, ``("field", image)`` or ``("ants", steps)`` from an
+    array, a text file, an image path/object, or ANTs transform file(s)."""
+    from . import ants
+    if isinstance(transform, (list, tuple)) and transform and             all(isinstance(t, (str, os.PathLike)) for t in transform):
+        return "ants", ants.load_ants(transform)
+    if ants.is_ants_transform(transform):
+        return "ants", ants.load_ants([transform])
     if isinstance(transform, np.ndarray) or isinstance(transform, (list, tuple)):
         m = np.asarray(transform, float)
         if m.shape != (4, 4):
@@ -89,6 +100,12 @@ def warp_to_mni(native, transform, *, threshold: float = 0.5, reference=None,
         # MNI voxel -> MNI world -> native world -> native voxel.
         M = np.linalg.inv(p.affine) @ np.linalg.inv(T) @ raff
         src = M[:3, :3] @ ijk + M[:3, 3:4]
+    elif kind == "ants":
+        from .ants import map_points
+        world = raff[:3, :3] @ ijk + raff[:3, 3:4]
+        nat = map_points(T, world)
+        inv = np.linalg.inv(p.affine)
+        src = (inv[:3, :3] @ nat + inv[:3, 3:4]).astype(np.float32)
     else:
         field = np.asarray(T.dataobj, dtype=np.float32)
         if field.ndim == 5:

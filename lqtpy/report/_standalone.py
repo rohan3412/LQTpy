@@ -178,7 +178,20 @@ def _flag_where(f) -> str:
     return "at " + ", ".join(f"{v:.0f}" for v in loc["mm"]) + " mm"
 
 
-def _flags_html(flags, verdict=None, score=None) -> str:
+def _example_html(fid) -> str:
+    from ..qc_examples import CAPTIONS, example_svg
+    svg = example_svg(fid)
+    if not svg:
+        return ""
+    # Inline styles: reports without examples keep their stylesheet unchanged.
+    return ('<details class="qcex" style="margin-top:4px;font-size:12.5px">'
+            '<summary style="cursor:pointer;color:var(--ink-2)">What does this look like?</summary>'
+            '<div style="display:flex;gap:12px;align-items:center;margin-top:6px;color:var(--ink)">'
+            f'{svg}<p class="note" style="margin:0">{_esc(CAPTIONS[fid])} '
+            '<span class="muted">(A made-up example.)</span></p></div></details>')
+
+
+def _flags_html(flags, verdict=None, score=None, examples=False) -> str:
     order = {"error": 0, "warn": 1, "info": 2}
     items = sorted(flags or [], key=lambda f: order[f["severity"]])
     out = []
@@ -191,8 +204,9 @@ def _flags_html(flags, verdict=None, score=None) -> str:
         where = _flag_where(f)
         sug = " · ".join(_esc(x) for x in (f"Where: {where}" if where else "", f.get("suggestion") or "") if x)
         sug = f'<div class="sug">{sug}</div>' if sug else ""
+        ex = _example_html(f.get("id")) if examples else ""
         out.append(f'<div class="flag {f["severity"]}"><span class="ic" aria-hidden="true">{icon}</span>'
-                   f'<div><b>{_esc(_flag_label(f))}</b>{_esc(f["message"])}{sug}</div></div>')
+                   f'<div><b>{_esc(_flag_label(f))}</b>{_esc(f["message"])}{sug}{ex}</div></div>')
     return f'<div class="flags">{"".join(out)}</div>'
 
 
@@ -256,16 +270,23 @@ def _about(manifest, run=None, report_name="report.html", extra_rows="") -> str:
 
 
 def _downloads(downloads: "dict | None") -> "tuple[str, str]":
-    """(card html, hidden data scripts) for the report's own tables."""
+    """(card html, hidden data scripts) for the report's own tables;
+    ``downloads`` maps file names to paths or to the files' bytes."""
     if not downloads:
         return "", ""
     btns, data = [], []
-    for i, (fname, path) in enumerate(sorted(downloads.items())):
+    for i, (fname, src) in enumerate(sorted(downloads.items())):
         try:
-            if os.path.getsize(path) > 5_000_000:
+            if isinstance(src, (bytes, bytearray)):
+                raw = bytes(src)
+            else:
+                if os.path.getsize(src) > 5_000_000:
+                    continue
+                with open(src, "rb") as fh:
+                    raw = fh.read()
+            if len(raw) > 5_000_000:
                 continue
-            with open(path, "rb") as fh:
-                b64 = base64.b64encode(fh.read()).decode("ascii")
+            b64 = base64.b64encode(raw).decode("ascii")
         except OSError:
             continue
         btns.append(f'<button type="button" class="btn small" data-dl="dl{i}" '
@@ -302,14 +323,48 @@ def _viewer(res) -> "tuple[str, str]":
     js = brainsprite_js()
     if not js:
         return "", ""
+    flag_btn = flag_img = flag_note = ""
+    if v.get("flagged"):
+        from ..figures import FLAG_COLOURS
+        words = {"remove": "stray voxels to remove", "add": "missing voxels to add",
+                 "inspect": "parts to look at"}
+        key = ", ".join(f'<span style="color:{FLAG_COLOURS[k]}">■</span> {words[k]}'
+                        for k in v.get("flagged_kinds", []))
+        flag_btn = ('<p><button type="button" class="btn" id="viewer-flag-btn" aria-pressed="false">'
+                    'Show flagged voxels</button></p>')
+        flag_img = f'<img id="viewer-ov2" src="{v["flagged"]}" alt="">'
+        flag_note = f' Flagged voxels (when shown): {key}; from the quality findings.'
     card = ('<details class="card"><summary><span class="t">Slice viewer</span>'
             '<span class="s">scroll through the brain: click a view to move the cursor (2 mm grid)'
-            '</span></summary><div class="inner"><div class="viewer" id="viewer">'
+            f'</span></summary><div class="inner">{flag_btn}<div class="viewer" id="viewer">'
             '<canvas id="viewer-canvas" aria-label="Interactive slice viewer"></canvas>'
             f'<img id="viewer-bg" src="{v["bg"]}" alt=""><img id="viewer-ov" src="{v["overlay"]}" alt="">'
-            '</div><p class="note">Lesion in orange on a tissue template. Uses brainsprite (MIT).</p>'
-            '</div></details>')
-    return card, _json_script("viewer-params", v["params"]) + f"<script>{js}</script>"
+            f'{flag_img}</div><p class="note">Lesion in orange on a tissue template.{flag_note} '
+            'Uses brainsprite (MIT).</p></div></details>')
+    tail = _json_script("viewer-params", v["params"]) + f"<script>{js}</script>"
+    if v.get("flagged"):
+        tail += _FLAG_JS
+    return card, tail
+
+
+# Swaps the viewer's overlay picture for the one with flagged voxels painted
+# in, then asks the viewer to redraw (the report script redraws on
+# "lqtpy-theme"). Only in reports made with the flagged-voxel option.
+_FLAG_JS = """<script>(function () {
+  var b = document.getElementById("viewer-flag-btn"), ov = document.getElementById("viewer-ov"),
+      alt = document.getElementById("viewer-ov2");
+  if (!b || !ov || !alt) return;
+  var plain = ov.src, on = false;
+  b.addEventListener("click", function () {
+    on = !on;
+    b.setAttribute("aria-pressed", String(on));
+    b.textContent = on ? "Hide flagged voxels" : "Show flagged voxels";
+    var redraw = function () { document.dispatchEvent(new Event("lqtpy-theme")); };
+    ov.addEventListener("load", redraw, {once: true});
+    ov.src = on ? alt.src : plain;
+    if (ov.complete) { ov.removeEventListener("load", redraw); redraw(); }
+  });
+})();</script>"""
 
 
 # =========================================================================== #
@@ -625,7 +680,7 @@ def render_single(res: dict, style: "ReportStyle | None" = None, *,
            f'{desc or "<p>No description.</p>"}<div id="desc-plain" hidden>{_esc(plain)}</div></section>')
     top += (f'<section class="card" aria-label="Figures"><h2>Lesion</h2><div class="figs">'
             f'{"".join(figs) or "<p class=note>No figures (plots were off).</p>"}</div></section></div>')
-    quality = (f'<section class="card" aria-label="Quality"><h2>Quality</h2>{_flags_html(flags, res.get("qc_verdict"), res.get("qc_score"))}</section>'
+    quality = (f'<section class="card" aria-label="Quality"><h2>Quality</h2>{_flags_html(flags, res.get("qc_verdict"), res.get("qc_score"), examples=style.qc_examples)}</section>'
                if flags else "")
 
     comp = "".join(_row(n, v, "") for n, v in _composition(facts)[:9])

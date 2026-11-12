@@ -120,8 +120,12 @@ def composition(lesion, threshold: float = 0.5) -> dict:
     p = prepare(lesion, threshold)
     if not p.n_voxels:
         return {k: 0.0 for k in _KEYS}
-    return dict(p.cached(("tissue_composition",),
-                         lambda: _shares(_sample(p, p.voxel_coords().astype(float))[0])))
+    return dict(p.cached(("tissue_composition",), lambda: _shares(_whole(p)[0])))
+
+
+def _whole(p):
+    """:func:`_sample` of every lesion voxel, cached."""
+    return p.cached(("tissue_sample",), lambda: _sample(p, p.voxel_coords().astype(float)))
 
 
 def _summary_class(sh: dict) -> "str | None":
@@ -194,7 +198,9 @@ def _locate(p, contact_mm, merge_gaps) -> dict:
             continue
         ijk = part_voxels(labels, objs, i + 1, off)
         n_vox = len(ijk)
-        cls, flat = _sample(p, ijk.astype(float))
+        # One part holds the whole lesion, the same voxels in the same order:
+        # its lookup is the whole lesion's.
+        cls, flat = _whole(p) if n_vox == p.n_voxels else _sample(p, ijk.astype(float))
         sh = _shares(cls)
         ok = flat >= 0
         d_v = float(to_vent.reshape(-1)[flat[ok]].min()) / 4 if ok.any() else float("inf")

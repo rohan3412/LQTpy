@@ -50,7 +50,7 @@ from .morphometry import compute_morphometry
 from .overlap import (_COLUMNS as _DAMAGE_COLUMNS, _HOMOLOG_COLUMNS,
                       _LOBE_COLUMNS, _NETWORK_COLUMNS, atlas_has_lobes, coverage,
                       homolog_symmetry, lobe_rollup, network_rollup, region_overlap_from_mask)
-from .prepared import prepare
+from .prepared import _stem, prepare
 from .tracts import _COLUMNS as _TRACT_COLUMNS
 
 __all__ = ["analyze_single", "analyze_group"]
@@ -82,14 +82,6 @@ _LEGACY_POSITIONAL = ("threshold", "tracts", "write", "plots", "verbose", "frame
 # --------------------------------------------------------------------------- #
 # Small helpers
 # --------------------------------------------------------------------------- #
-def _stem(path) -> str:
-    """Output-file stem for a lesion source; non-path sources get "lesion"."""
-    if not isinstance(path, (str, os.PathLike)):
-        return "lesion"
-    from .formats import strip_extension
-    return strip_extension(os.path.basename(os.fspath(path)))
-
-
 def _atlas_keys(atlases) -> "list[str]":
     """None -> the defaults; a bare string -> a one-item list (``"aal"`` must
     not be iterated per character; ``"aal,dk"`` is split); duplicates
@@ -121,11 +113,23 @@ def _fmt_elapsed(sec: float) -> str:
     return f"{sec:.1f} s" if sec < 60 else f"{sec / 60:.1f} min"
 
 
-def _write_csv(path, records, columns):
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(records)
+def _write_csv(path, records, columns) -> bytes:
+    """Write a table; returns the bytes written (the report embeds them)."""
+    import io
+    buf = io.StringIO(newline="")
+    writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(records)
+    data = buf.getvalue().encode("utf-8")
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return data
+
+
+def _write_bytes(path, data: bytes) -> bytes:
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return data
 
 
 def _pandas():
@@ -235,6 +239,24 @@ _TISSUE_COLUMNS = ["TissueClass", "PctCortex", "PctWhiteMatter", "PctDeepGrey", 
                    "NDeepGrey", "NInfratentorial", "NOutsideBrain"]
 
 
+def _flagged_masks(p, flags) -> list:
+    """``[(kind, mask)]`` for the findings that mark voxels (see
+    :func:`lqtpy.qc_tools.problem_mask`); a finding that fails is skipped."""
+    from .qc_tools import PROBLEM_KIND, problem_mask
+    out = []
+    for f in flags:
+        kind = PROBLEM_KIND.get(f.id)
+        if kind is None:
+            continue
+        try:
+            m = problem_mask(p, f)
+        except Exception:
+            continue
+        if m.any():
+            out.append((kind, m))
+    return out
+
+
 def _part_row(pt: dict) -> dict:
     row = {"Part": pt["id"], "Voxels": pt["voxels"], "VolumeMM3": pt["volume_mm3"],
            "Location": pt["class"], "TissueClass": pt.get("tissue_class") or "",
@@ -328,7 +350,10 @@ def _analyse(p, atlases, *, kind, tracts, plots, qc, describe, profile, extras,
         from . import figures
         figs["glass_svg"] = figures.glass_brain_svg(p)
         figs["slices_svg"] = figures.slices_svg(p, morph["center_of_mass_mm"])
-        if viewer:
+        if viewer == "flagged":
+            # Opt-in: the viewer gets a "Show flagged voxels" switch (off at first).
+            figs["viewer"] = figures.viewer_data(p, flagged=_flagged_masks(p, flags))
+        elif viewer:
             figs["viewer"] = figures.viewer_data(p)
         if thumbnail:
             figs["thumb_uri"] = figures.thumbnail_uri(p)
@@ -435,9 +460,9 @@ def _analyse(p, atlases, *, kind, tracts, plots, qc, describe, profile, extras,
 
 def _write_single(result, out_dir, name, *, plots, report_style=None, back_link=None,
                   pdf=False, run=None):
-    from .dictionary import write_dictionary
+    from .dictionary import dictionary_csv
     os.makedirs(out_dir, exist_ok=True)
-    written = {}
+    written, contents = {}, {}
     with open(os.path.join(out_dir, f"{name}_morphometry.json"), "w", encoding="utf-8") as fh:
         json.dump(result["morphometry"], fh, indent=2)
     summary = {"name": name, "qc": result["qc"], "manifest": result["manifest"],
@@ -450,7 +475,7 @@ def _write_single(result, out_dir, name, *, plots, report_style=None, back_link=
         json.dump(summary, fh, indent=2, default=_jsonable)
 
     def table(fname, rows, cols):
-        _write_csv(os.path.join(out_dir, fname), rows, cols)
+        contents[fname] = _write_csv(os.path.join(out_dir, fname), rows, cols)
         written[fname] = cols
 
     if result.get("tissue") and result["tissue"]["parts"]:
@@ -467,10 +492,10 @@ def _write_single(result, out_dir, name, *, plots, report_style=None, back_link=
         table(f"{name}_key_structures.csv", result["key_structures"], _KEY_COLUMNS)
     if result["disconnection"] is not None:
         table(f"{name}_disconnection.csv", result["disconnection"], _DISCON_COLUMNS)
-    downloads = {f: os.path.join(out_dir, f) for f in written}
+    downloads = dict(contents)          # the report embeds the tables just written
     written[f"{name}_morphometry.json"] = list(result["morphometry"].keys())
-    write_dictionary(out_dir, written)
-    downloads["data_dictionary.csv"] = os.path.join(out_dir, "data_dictionary.csv")
+    downloads["data_dictionary.csv"] = _write_bytes(os.path.join(out_dir, "data_dictionary.csv"),
+                                                    dictionary_csv(written))
     if result["description"]:
         with open(os.path.join(out_dir, f"{name}_description.txt"), "w", encoding="utf-8") as fh:
             fh.write(result["description"]["text"] + "\n")
@@ -505,7 +530,8 @@ def analyze_single(lesion=None, atlases=None, out_dir=None, *legacy, lesion_path
                    threshold=0.5, tracts=True, write=True, plots=False, verbose=False,
                    frame=None, qc=True, describe=True, profile="stroke", extras=None,
                    disconnection="auto", expected_side=None, report_style=None, pdf=False,
-                   native=None, transform=None, anonymise=False, viewer=True):
+                   native=None, transform=None, anonymise=False, viewer=True,
+                   flagged_voxels=False):
     """Analyse one lesion; return a result dict and (optionally) write CSV/JSON
     tables (``write=True``) and a self-contained HTML report
     (``write=True`` and ``plots=True``).
@@ -528,6 +554,8 @@ def analyze_single(lesion=None, atlases=None, out_dir=None, *legacy, lesion_path
     file name everywhere (:mod:`lqtpy.anonymise`). ``pdf=True`` (with
     ``write`` and ``plots``) also saves the report as PDF. ``viewer=False``
     leaves out the scroll-through slice viewer (smaller file).
+    ``flagged_voxels=True`` (opt-in) gives the viewer a "Show flagged voxels"
+    switch, off when the report opens.
 
     Tables are records by default; ``frame="pandas"`` returns DataFrames.
     Arguments after ``out_dir`` are keyword-only (positional use is
@@ -561,7 +589,8 @@ def analyze_single(lesion=None, atlases=None, out_dir=None, *legacy, lesion_path
     result = _analyse(p, atlases, kind="single", tracts=tracts, plots=plots, qc=qc,
                       describe=describe, profile=profile, extras=extras,
                       disconnection=disconnection, expected_side=expected_side,
-                      threshold=threshold, native=native, viewer=viewer, thumbnail=plots,
+                      threshold=threshold, native=native,
+                      viewer="flagged" if (viewer and flagged_voxels) else viewer, thumbnail=plots,
                       anonymous=anon is not None)
     result["elapsed"] = _fmt_elapsed(time.time() - t0)
     from .repro import run_record
@@ -739,23 +768,11 @@ def _subject_job(job: dict) -> dict:
 
 
 def _run_jobs(jobs, n_jobs, on_done):
-    """Run subject jobs in order (``n_jobs=1``) or in a process pool;
+    """Run subject jobs in order (``n_jobs=1``) or in a process pool
+    (a number, ``-1`` or ``"auto"``; see :mod:`lqtpy._jobs`);
     ``on_done(i, result)`` is called as each finishes."""
-    results = [None] * len(jobs)
-    if n_jobs and n_jobs != 1 and len(jobs) > 1:
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-        workers = (os.cpu_count() or 2) if n_jobs < 1 else n_jobs
-        with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as ex:
-            futs = {ex.submit(_subject_job, j): i for i, j in enumerate(jobs)}
-            for fut in as_completed(futs):
-                i = futs[fut]
-                results[i] = fut.result()
-                on_done(i, results[i])
-    else:
-        for i, j in enumerate(jobs):
-            results[i] = _subject_job(j)
-            on_done(i, results[i])
-    return results
+    from ._jobs import run_tasks
+    return run_tasks(_subject_job, jobs, n_jobs, on_done)
 
 
 def analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.5, tracts=True,
@@ -763,7 +780,8 @@ def analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.
                   profile="stroke", extras=None, disconnection="auto", subject_reports=True,
                   report_style=None, pdf=False, metadata=None, subject_column=None,
                   group_by=None, compare=None, side_column="auto", n_jobs=1, anonymise=False,
-                  incremental=False, duplicates=True, outliers=True, viewer=True):
+                  incremental=False, duplicates=True, outliers=True, viewer=True,
+                  flagged_voxels=False):
     """Analyse a group of lesions; return a result dict and (optionally) write
     group CSVs, a group HTML report (``plots=True``) and -- with
     ``subject_reports=True`` -- one full report per subject, linked from the
@@ -790,7 +808,10 @@ def analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.
                       ``"auto"`` finds one by name, ``None`` turns it off.
     ``duplicates``    flag identical / near-identical masks.
     ``outliers``      flag subjects far from the group (10+ subjects).
-    ``n_jobs``        worker processes (``-1``: one per CPU). On Windows,
+    ``flagged_voxels`` (opt-in) a "Show flagged voxels" switch in each
+                      subject report's slice viewer.
+    ``n_jobs``        worker processes (``-1``: one per CPU; ``"auto"``: one process for
+                      a few files, else one per CPU less one, at most 8). On Windows,
                       call from under ``if __name__ == "__main__":``.
     ``incremental``   reuse cached per-subject results from a previous run
                       into the same ``out_dir`` when the file and settings
@@ -855,7 +876,8 @@ def analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.
     opts = {"atlases": atlases, "threshold": threshold, "tracts": tracts, "qc": qc,
             "describe": describe, "profile": profile, "extras": extras,
             "disconnection": disconnection, "plots": plots,
-            "per_report": per_report, "thumbnail": bool(plots), "viewer": viewer,
+            "per_report": per_report, "thumbnail": bool(plots),
+            "viewer": "flagged" if (viewer and flagged_voxels) else viewer,
             "write": write, "out_dir": out_dir, "report_style": report_style,
             "subject_pdf": per_report and pdf == "bundle", "anonymous": anon is not None}
     cache_dir = os.path.join(out_dir, ".lqtpy_cache") if (incremental and write) else None
@@ -889,12 +911,12 @@ def analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.
         e["meta"] = meta["by_subject"].get(nm, {})
         subject_manifest = r["manifest"]
         n_cached += bool(r.get("cached"))
-        np.add.at(freq, r["idx"], 1)
+        freq[r["idx"]] += 1           # a subject's voxel ids are unique (sorted flat indices)
         if cmp_col:
             g = str(e["meta"].get(cmp_col, ""))
             if g in (cmp_a, cmp_b):
                 fb = freq_by.setdefault(g, np.zeros_like(freq))
-                np.add.at(fb, r["idx"], 1)
+                fb[r["idx"]] += 1
         if duplicates:
             sigs.append(cohort.signature(nm, r["idx"], ref_img.shape[:3], np.asarray(ref_img.affine)))
         for k in atlases:
@@ -1039,7 +1061,10 @@ def analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.
     man.add("comparison", "Two-group comparison", RAN if comparison else SKIPPED,
             reason=(f"{cmp_col}: {cmp_a} vs {cmp_b}") if comparison else "no compare= column")
     if n_jobs and n_jobs != 1:
-        man.add("parallel", "Parallel workers", RAN, reason=f"n_jobs={n_jobs}")
+        from ._jobs import resolve_jobs
+        man.add("parallel", "Parallel workers", RAN,
+                reason=f"n_jobs={n_jobs}" + (f" ({resolve_jobs(n_jobs, n)} workers)"
+                                             if n_jobs == "auto" else ""))
     if incremental:
         man.add("incremental", "Incremental run", RAN, reason=f"{n_cached} of {n} subjects reused")
     if anon is not None:
@@ -1108,12 +1133,12 @@ def analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.
 
 
 def _write_group(result, out_dir, *, plots, pdf, report_style, freq_img, meta, tract_agg):
-    from .dictionary import write_dictionary
+    from .dictionary import dictionary_csv
     os.makedirs(out_dir, exist_ok=True)
-    written = {}
+    written, contents = {}, {}
 
     def table(fname, rows, cols):
-        _write_csv(os.path.join(out_dir, fname), rows, cols)
+        contents[fname] = _write_csv(os.path.join(out_dir, fname), rows, cols)
         written[fname] = cols
 
     subjects = result["subjects"]
@@ -1148,9 +1173,9 @@ def _write_group(result, out_dir, *, plots, pdf, report_style, freq_img, meta, t
                   "SubjectB": ("", "Second subject of the pair."),
                   "Dice": ("", "Dice overlap of the two masks (2 mm grid)."),
                   "Kind": ("", "identical or near-identical.")})
-    write_dictionary(out_dir, written, extra=extra)
-    downloads = {f: os.path.join(out_dir, f) for f in written}
-    downloads["data_dictionary.csv"] = os.path.join(out_dir, "data_dictionary.csv")
+    downloads = dict(contents)          # the report embeds the tables just written
+    downloads["data_dictionary.csv"] = _write_bytes(os.path.join(out_dir, "data_dictionary.csv"),
+                                                    dictionary_csv(written, extra=extra))
     if plots:
         from .report import render_group
         path = os.path.join(out_dir, "group_report.html")

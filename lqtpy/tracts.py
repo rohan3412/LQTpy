@@ -55,19 +55,59 @@ def _load_tracts():
         raise DataUnavailableError(
             f"White-matter tract index not found at '{_TRACT_NPZ}'. This "
             "data file should ship inside the package; reinstall lqtpy.")
-    npz = np.load(_TRACT_NPZ, allow_pickle=False)
+    from ._diskcache import cached_arrays, file_key
+
+    def read():
+        with np.load(_TRACT_NPZ, allow_pickle=False) as z:
+            return {k: z[k] for k in z.files}
+    npz = cached_arrays(f"hcp842_tracts_{file_key(_TRACT_NPZ)}", read)
     shape3 = tuple(int(s) for s in npz["shape"])
     ref = nib.Nifti1Image(np.zeros(shape3, dtype=np.uint8), npz["affine"])
     tracts = []
     for i, name in enumerate(npz["names"]):
         key = f"idx_{i}"
-        if key not in npz.files:
+        if key not in npz:
             continue
         idx = npz[key]
-        idx.flags.writeable = False
         pretty, hemi = _pretty(str(name))
         tracts.append({"name": pretty, "hemi": hemi, "idx": idx, "n_vox": int(idx.size)})
     return {"ref": ref, "shape": shape3, "tracts": tracts}
+
+
+@once
+def _lookup():
+    """Every tract voxel, sorted by its index on the tract grid: ``vox``
+    (that index), ``tract`` (position in ``_load_tracts()["tracts"]``) and
+    ``pos`` (position in that tract's ``idx``). A lesion finds the tract
+    voxels it covers in time proportional to its own size, not the tracts'."""
+    from ._diskcache import cached_arrays, file_key
+    tracts = _load_tracts()["tracts"]
+
+    def build():
+        sizes = [t["idx"].size for t in tracts]
+        vox = np.concatenate([t["idx"] for t in tracts]).astype(np.int64)
+        order = np.argsort(vox, kind="stable")
+        return {"vox": vox[order],
+                "tract": np.repeat(np.arange(len(tracts), dtype=np.int16), sizes)[order],
+                "pos": np.concatenate([np.arange(n, dtype=np.int32) for n in sizes])[order]}
+    return cached_arrays(f"hcp842_tract_lookup_{file_key(_TRACT_NPZ)}", build)
+
+
+def covered(gm) -> "list[np.ndarray]":
+    """For each tract (in ``_load_tracts()["tracts"]`` order), the positions in
+    its ``idx`` of the voxels the lesion covers; ``gm`` is the lesion's
+    :class:`~lqtpy.prepared.GridMask` on the tract grid. The same voxels as
+    ``np.flatnonzero(gm.mask.reshape(-1)[t["idx"]])``."""
+    lk = _lookup()
+    lo = np.searchsorted(lk["vox"], gm.flat, "left")
+    n = np.searchsorted(lk["vox"], gm.flat, "right") - lo
+    lo, n = lo[n > 0], n[n > 0]
+    sel = np.repeat(lo - (np.cumsum(n) - n), n) + np.arange(int(n.sum()))
+    tract, pos = lk["tract"][sel], lk["pos"][sel]
+    order = np.argsort(tract, kind="stable")
+    bounds = np.concatenate([[0], np.cumsum(np.bincount(tract, minlength=len(_load_tracts()["tracts"])))])
+    pos = pos[order]
+    return [pos[a:b] for a, b in zip(bounds[:-1], bounds[1:])]
 
 
 _COLUMNS = ["Tract", "Hemi", "TractVoxels", "LesionVoxels",
@@ -88,12 +128,11 @@ def tract_overlap(lesion_img, frame: str | None = None):
     cache = _load_tracts()
     p = lesion_img if isinstance(lesion_img, PreparedLesion) else prepare(lesion_img, threshold=0.0)
     gm = p.on_grid(cache["ref"])
-    mask_flat = gm.mask.reshape(-1)
     lesion_total = gm.n_voxels
 
     rows = []
-    for t in cache["tracts"]:
-        inter = int(np.count_nonzero(mask_flat[t["idx"]]))
+    for t, hit in zip(cache["tracts"], covered(gm)):
+        inter = int(hit.size)
         if inter == 0:
             continue
         rows.append({

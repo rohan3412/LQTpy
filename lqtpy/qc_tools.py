@@ -21,7 +21,8 @@ import os
 import numpy as np
 from scipy import ndimage
 
-__all__ = ["problem_mask", "PROBLEM_KIND", "FIXABLE", "fix", "assess_folder", "rank"]
+__all__ = ["problem_mask", "PROBLEM_KIND", "FIXABLE", "fix", "fix_plan", "assess_folder", "rank",
+           "export_problems"]
 
 PROBLEM_KIND = {
     "specks": "remove", "strokes": "remove", "edge_artifact": "remove", "outside_brain": "remove",
@@ -42,6 +43,24 @@ def _finding(p, finding, **kw):
             return None
         return found[0]
     return finding
+
+
+def _grid_holes(mask: np.ndarray, opts) -> np.ndarray:
+    """:func:`lqtpy.qc_grade.hole_voxels` of a whole-grid mask, worked out in
+    the mask's box plus 4 voxels (the closing and erosions in it reach 3;
+    beyond that the result is empty, as on the whole grid)."""
+    from .qc_grade import hole_voxels
+    out = np.zeros(mask.shape, bool)
+    lo, hi = [], []
+    for a in range(mask.ndim):
+        idx = np.flatnonzero(mask.any(axis=tuple(b for b in range(mask.ndim) if b != a)))
+        if not idx.size:
+            return out
+        lo.append(max(0, int(idx[0]) - 4))
+        hi.append(min(mask.shape[a], int(idx[-1]) + 5))
+    box = tuple(slice(a, b) for a, b in zip(lo, hi))
+    out[box] = hole_voxels(mask[box], opts)
+    return out
 
 
 def _place(p, sub: np.ndarray, lo) -> np.ndarray:
@@ -124,6 +143,68 @@ def problem_mask(lesion, finding, *, threshold: float = 0.5, **options) -> np.nd
     return np.zeros(p.shape, bool)
 
 
+def export_problems(lesion, out_dir, *, threshold: float = 0.5, context=None, **options) -> "list[dict]":
+    """Write one overlay mask per finding into ``out_dir`` (created if
+    needed), on the lesion's own grid, to load over it in MRIcroGL or
+    ITK-SNAP while fixing: ``<lesion>_<finding id>.nii.gz``, 1 where the
+    finding's voxels are (:func:`problem_mask`). Findings about the whole
+    mask have no voxels and get no file. Never overwrites a file; returns
+    ``[{"id", "kind", "voxels", "path"}]`` for the files written."""
+    import nibabel as nib
+    from . import qc
+    from .prepared import prepare
+    p = prepare(lesion, threshold)
+    os.makedirs(out_dir, exist_ok=True)
+    out, seen = [], set()
+    for f in qc.check(p, context=context):
+        if f.id in seen:
+            continue
+        seen.add(f.id)
+        m = problem_mask(p, f, threshold=threshold, **options)
+        if not m.any():
+            continue
+        path = os.path.join(out_dir, f"{p.name}_{f.id}.nii.gz")
+        if os.path.exists(path):
+            raise FileExistsError(f"{path} already exists; lqtpy never overwrites a file")
+        nib.save(nib.Nifti1Image(m.astype(np.uint8), p.affine), path)
+        out.append({"id": f.id, "kind": PROBLEM_KIND.get(f.id, "inspect"),
+                    "voxels": int(m.sum()), "path": path})
+    return out
+
+
+def fix_plan(lesion, *, threshold: float = 0.5, context=None, ids=None, **options) -> "list[dict]":
+    """Each fix lqtpy can make, worked out on its own, for a preview: one
+    entry per fixable finding the mask has (or per id in ``ids``), in
+    :data:`FIXABLE` order::
+
+        {"id", "label", "action", "advice", "adds_voxels",
+         "voxels_added", "voxels_removed", "added", "removed"}
+
+    ``added`` / ``removed`` are boolean masks on the mask's own grid. Every
+    entry starts from the original mask, so after applying one, plan again
+    (fixes can overlap: filling gaps can also fill a hole). A fix that
+    would change nothing is left out. Nothing is written."""
+    from . import qc
+    from .prepared import prepare
+    from .qc_advice import advice_for
+    p = prepare(lesion, threshold)
+    found = {f.id: f for f in qc.check(p, context=context)}
+    wanted = [i for i in FIXABLE if (i in found if ids is None else i in ids)]
+    out = []
+    for fid in wanted:
+        _, rep = fix(p, [fid], threshold=threshold, context=context, **options)
+        if not (rep["voxels_added"] or rep["voxels_removed"]):
+            continue
+        f = found.get(fid)
+        adv = advice_for(f if f is not None else fid)
+        out.append({"id": fid, "label": f.label if f is not None else "",
+                    "action": adv["action"], "advice": adv["text"],
+                    "adds_voxels": bool(rep["voxels_added"]),
+                    "voxels_added": rep["voxels_added"], "voxels_removed": rep["voxels_removed"],
+                    "added": rep["added"], "removed": rep["removed"]})
+    return out
+
+
 def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
     """Repair what lqtpy can repair safely: strokes, specks, edge fragments,
     voxels beyond the brain edge (removed), gaps between drawn slices, partly
@@ -174,22 +255,17 @@ def fix(lesion, ids=None, *, threshold: float = 0.5, context=None, **options):
                     elif nb:
                         moved[k] = nb[0] | nb[-1]
         elif fid == "holes":
-            from .qc_grade import hole_voxels
-            cur = cur | hole_voxels(cur, opts)
+            cur = cur | _grid_holes(cur, opts)
         elif fid == "partial_gaps":
             cur = cur | qc._partial_gap_voxels(cp, **options)
         elif fid == "hollow":
             f = found.get(fid)
             names = qc.slice_axis_names(p.affine)
             ax = next((a for a, n in names.items() if f and n == f.evidence.get("plane")), 2)
+            from ._morph import fill_holes
             sub, off = cp.cropped(pad=4)
             d = ndimage.binary_dilation(sub, iterations=3)
-            fl = np.zeros_like(d)
-            for k in range(d.shape[ax]):
-                sl = [slice(None)] * 3
-                sl[ax] = k
-                fl[tuple(sl)] = ndimage.binary_fill_holes(d[tuple(sl)])
-            fl = ndimage.binary_erosion(fl, iterations=3) | sub
+            fl = ndimage.binary_erosion(fill_holes(d, axis=ax), iterations=3) | sub
             sl3 = tuple(slice(int(off[a]), int(off[a]) + sub.shape[a]) for a in range(3))
             cur[sl3] |= fl
         if (cur != before).any():
@@ -222,7 +298,7 @@ def assess_folder(folder, *, tier: str = "full", recursive: bool = False, jobs: 
     """QC every lesion file in ``folder``. Returns ``{"results": [{"file",
     "name", "result" (QCResult.to_dict()) or "error"}], "summary": {"n",
     "errors", "verdicts", "by_finding": {"id:grade": count}, "qc_version"}}``.
-    ``jobs > 1`` uses worker processes."""
+    ``jobs > 1``, ``-1`` or ``"auto"`` uses worker processes."""
     from .formats import is_lesion_file
     from .qc_model import QC_VERSION
     files = []
@@ -233,12 +309,8 @@ def assess_folder(folder, *, tier: str = "full", recursive: bool = False, jobs: 
         files = [os.path.join(folder, f) for f in os.listdir(folder) if is_lesion_file(f)]
     files.sort()
     args = [(f, tier, kw) for f in files]
-    if jobs and jobs > 1 and len(files) > 1:
-        from concurrent.futures import ProcessPoolExecutor
-        with ProcessPoolExecutor(max_workers=jobs) as ex:
-            results = list(ex.map(_assess_one, args, chunksize=4))
-    else:
-        results = [_assess_one(a) for a in args]
+    from ._jobs import run_tasks
+    results = run_tasks(_assess_one, args, jobs)
     verdicts, by = {}, {}
     for r in results:
         if "result" not in r:

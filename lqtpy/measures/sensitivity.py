@@ -38,24 +38,49 @@ STABLE_PP, SENSITIVE_PP = 5.0, 15.0
 STABLE_VOL, SENSITIVE_VOL = 20.0, 40.0
 _LEVELS = ("stable", "somewhat sensitive", "sensitive")
 VARIANTS = ("eroded", "dilated", "smoothed")
+#: The redraws are worked out in a box this many voxels beyond the lesion: the
+#: Gaussian (sigma 1) reaches 4 voxels, and its mirror-image edge handling
+#: then only meets empty voxels, as on the whole grid.
+_REACH = 6
 
 
-def _variants(mask: np.ndarray) -> "dict[str, np.ndarray]":
-    pad = np.pad(mask, 2)
-    out = {
-        "eroded": ndimage.binary_erosion(pad),
-        "dilated": ndimage.binary_dilation(pad),
-        "smoothed": ndimage.gaussian_filter(pad.astype(np.float32), 1.0) > 0.5,
-    }
-    return {k: v[2:-2, 2:-2, 2:-2] for k, v in out.items()}
+def _variants(p) -> "dict[str, tuple[int, object]]":
+    """``{name: (voxels, lesion)}`` for the three redraws (``lesion`` is
+    None when a redraw is empty). The same voxels as eroding, dilating and
+    smoothing the whole grid with two empty voxels of padding around it
+    (the grid's edge counts as outside), computed in a box around the lesion
+    only."""
+    from ..prepared import _nonzero
+    pad = 2
+    shape = np.asarray(p.shape)
+    lo = np.maximum(np.asarray(p.bbox[0]) + pad - _REACH, 0)       # box, padded-grid coordinates
+    hi = np.minimum(np.asarray(p.bbox[1]) + pad + _REACH, shape + 2 * pad)
+    g_lo, g_hi = np.maximum(lo - pad, 0), np.minimum(hi - pad, shape)  # its part on the grid
+    on_grid = tuple(slice(int(a), int(b)) for a, b in zip(g_lo, g_hi))
+    in_box = tuple(slice(int(a - b + pad), int(c - b + pad)) for a, b, c in zip(g_lo, lo, g_hi))
+    box = np.zeros(tuple(int(v) for v in hi - lo), bool)
+    box[in_box] = p.mask[on_grid]
+    redraws = (ndimage.binary_erosion(box), ndimage.binary_dilation(box),
+               ndimage.gaussian_filter(box.astype(np.float32), 1.0) > 0.5)
+    out = {}
+    for name, r in zip(VARIANTS, redraws):
+        part = r[in_box]
+        nz = _nonzero(part)
+        if not nz[0].size:
+            out[name] = (0, None)
+            continue
+        full = np.zeros(p.shape, bool)
+        full[on_grid] = part
+        out[name] = (int(nz[0].size),
+                     p._derived(full, nonzero=tuple(a + int(o) for a, o in zip(nz, g_lo))))
+    return out
 
 
-def _overlap(mask: np.ndarray, affine) -> "dict[str, tuple[float, float]]":
-    import nibabel as nib
+def _overlap(lesion) -> "dict[str, tuple[float, float]]":
     from ..api import atlas_overlap
-    if not mask.any():
+    if lesion is None:
         return {}
-    rows = atlas_overlap(nib.Nifti1Image(mask.astype(np.uint8), affine), ATLAS)
+    rows = atlas_overlap(lesion, ATLAS)
     return {r["RegionName"]: (float(r["PercentDamage"]), float(r["PercentOfLesion"])) for r in rows}
 
 
@@ -67,16 +92,16 @@ def compute(prepared) -> dict:
     n = int(prepared.n_voxels)
     if n < MIN_VOXELS:
         return {"characterised": False, "n_voxels": n}
-    base = _overlap(prepared.mask, prepared.affine)
+    base = _overlap(prepared)
     main = _main(base)
     out = {"characterised": True, "atlas": ATLAS, "main_region": main, "variants": {}}
     worst_pp, main_stable = 0.0, True
-    for name, m in _variants(prepared.mask).items():
-        ov = _overlap(m, prepared.affine)
+    for name, (n_var, lesion) in _variants(prepared).items():
+        ov = _overlap(lesion)
         keys = set(base) | set(ov)
         pp = max((abs(ov.get(k, (0.0, 0.0))[0] - base.get(k, (0.0, 0.0))[0]) for k in keys), default=0.0)
         vmain = _main(ov)
-        out["variants"][name] = {"volume_change_pct": round(100.0 * (int(m.sum()) - n) / n, 1),
+        out["variants"][name] = {"volume_change_pct": round(100.0 * (n_var - n) / n, 1),
                                  "max_damage_change_pp": round(pp, 1), "main_region": vmain}
         worst_pp = max(worst_pp, pp)
         main_stable &= vmain == main

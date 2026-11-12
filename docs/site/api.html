@@ -20,7 +20,7 @@ p code,li code,td code{background:var(--code);border-radius:5px;padding:1px 5px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
 .card h3{margin-top:0}.muted{color:var(--ink3)}table{border-collapse:collapse;width:100%}
 td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
-</style></head><body><header><b>LQTpy</b><nav><a href="index.html">Overview</a><a href="cli.html">Command line</a><a href="api.html">Python API</a><a href="gallery.html">Gallery</a></nav></header><main><h1>Python API</h1><p>Every public function, with its docstring. Modules: <a href="#lqtpy">lqtpy</a>, <a href="#lqtpy.qc">lqtpy.qc</a>, <a href="#lqtpy.tissue">lqtpy.tissue</a>, <a href="#lqtpy.watershed">lqtpy.watershed</a>, <a href="#lqtpy.structures">lqtpy.structures</a>, <a href="#lqtpy.mirror">lqtpy.mirror</a>, <a href="#lqtpy.native">lqtpy.native</a>, <a href="#lqtpy.formats">lqtpy.formats</a>, <a href="#lqtpy.metadata">lqtpy.metadata</a>, <a href="#lqtpy.cohort">lqtpy.cohort</a>, <a href="#lqtpy.repro">lqtpy.repro</a>, <a href="#lqtpy.report">lqtpy.report</a>, <a href="#lqtpy.figures">lqtpy.figures</a>, <a href="#lqtpy.registry">lqtpy.registry</a>, <a href="#lqtpy.datasets">lqtpy.datasets</a>, <a href="#lqtpy.scaffold">lqtpy.scaffold</a>, <a href="#lqtpy.web">lqtpy.web</a>, <a href="#lqtpy.watch">lqtpy.watch</a>, <a href="#lqtpy.config">lqtpy.config</a>.</p><h2 id="lqtpy">lqtpy</h2><p class="muted" style="white-space:pre-wrap">LQTpy - Lesion Quantification Toolkit (lean rewrite).</p><div class="fn" id="lqtpy.analyze_single"><h3>analyze_single(lesion=None, atlases=None, out_dir=None, *legacy, lesion_path=None, threshold=0.5, tracts=True, write=True, plots=False, verbose=False, frame=None, qc=True, describe=True, profile=&#x27;stroke&#x27;, extras=None, disconnection=&#x27;auto&#x27;, expected_side=None, report_style=None, pdf=False, native=None, transform=None, anonymise=False, viewer=True)</h3><div class="doc">Analyse one lesion; return a result dict and (optionally) write CSV/JSON
+</style></head><body><header><b>LQTpy</b><nav><a href="index.html">Overview</a><a href="cli.html">Command line</a><a href="api.html">Python API</a><a href="gallery.html">Gallery</a></nav></header><main><h1>Python API</h1><p>Every public function, with its docstring. Modules: <a href="#lqtpy">lqtpy</a>, <a href="#lqtpy.qc">lqtpy.qc</a>, <a href="#lqtpy.qc_tools">lqtpy.qc_tools</a>, <a href="#lqtpy.qc_advice">lqtpy.qc_advice</a>, <a href="#lqtpy.labels">lqtpy.labels</a>, <a href="#lqtpy.bids">lqtpy.bids</a>, <a href="#lqtpy.ants">lqtpy.ants</a>, <a href="#lqtpy.xlsx">lqtpy.xlsx</a>, <a href="#lqtpy.notebook">lqtpy.notebook</a>, <a href="#lqtpy.doctor">lqtpy.doctor</a>, <a href="#lqtpy.demo">lqtpy.demo</a>, <a href="#lqtpy.tissue">lqtpy.tissue</a>, <a href="#lqtpy.watershed">lqtpy.watershed</a>, <a href="#lqtpy.structures">lqtpy.structures</a>, <a href="#lqtpy.mirror">lqtpy.mirror</a>, <a href="#lqtpy.native">lqtpy.native</a>, <a href="#lqtpy.formats">lqtpy.formats</a>, <a href="#lqtpy.metadata">lqtpy.metadata</a>, <a href="#lqtpy.cohort">lqtpy.cohort</a>, <a href="#lqtpy.repro">lqtpy.repro</a>, <a href="#lqtpy.report">lqtpy.report</a>, <a href="#lqtpy.figures">lqtpy.figures</a>, <a href="#lqtpy.registry">lqtpy.registry</a>, <a href="#lqtpy.datasets">lqtpy.datasets</a>, <a href="#lqtpy.scaffold">lqtpy.scaffold</a>, <a href="#lqtpy.web">lqtpy.web</a>, <a href="#lqtpy.watch">lqtpy.watch</a>, <a href="#lqtpy.config">lqtpy.config</a>.</p><h2 id="lqtpy">lqtpy</h2><p class="muted" style="white-space:pre-wrap">LQTpy - Lesion Quantification Toolkit (lean rewrite).</p><div class="fn" id="lqtpy.analyze_single"><h3>analyze_single(lesion=None, atlases=None, out_dir=None, *legacy, lesion_path=None, threshold=0.5, tracts=True, write=True, plots=False, verbose=False, frame=None, qc=True, describe=True, profile=&#x27;stroke&#x27;, extras=None, disconnection=&#x27;auto&#x27;, expected_side=None, report_style=None, pdf=False, native=None, transform=None, anonymise=False, viewer=True, flagged_voxels=False)</h3><div class="doc">Analyse one lesion; return a result dict and (optionally) write CSV/JSON
 tables (``write=True``) and a self-contained HTML report
 (``write=True`` and ``plots=True``).
 
@@ -42,10 +42,12 @@ native mask, warps it to MNI with that transform and does the same.
 file name everywhere (:mod:`lqtpy.anonymise`). ``pdf=True`` (with
 ``write`` and ``plots``) also saves the report as PDF. ``viewer=False``
 leaves out the scroll-through slice viewer (smaller file).
+``flagged_voxels=True`` (opt-in) gives the viewer a &quot;Show flagged voxels&quot;
+switch, off when the report opens.
 
 Tables are records by default; ``frame=&quot;pandas&quot;`` returns DataFrames.
 Arguments after ``out_dir`` are keyword-only (positional use is
-deprecated).</div></div><div class="fn" id="lqtpy.analyze_group"><h3>analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.5, tracts=True, write=True, plots=False, verbose=False, frame=None, qc=True, describe=True, profile=&#x27;stroke&#x27;, extras=None, disconnection=&#x27;auto&#x27;, subject_reports=True, report_style=None, pdf=False, metadata=None, subject_column=None, group_by=None, compare=None, side_column=&#x27;auto&#x27;, n_jobs=1, anonymise=False, incremental=False, duplicates=True, outliers=True, viewer=True)</h3><div class="doc">Analyse a group of lesions; return a result dict and (optionally) write
+deprecated).</div></div><div class="fn" id="lqtpy.analyze_group"><h3>analyze_group(inputs=None, atlases=None, out_dir=None, *legacy, threshold=0.5, tracts=True, write=True, plots=False, verbose=False, frame=None, qc=True, describe=True, profile=&#x27;stroke&#x27;, extras=None, disconnection=&#x27;auto&#x27;, subject_reports=True, report_style=None, pdf=False, metadata=None, subject_column=None, group_by=None, compare=None, side_column=&#x27;auto&#x27;, n_jobs=1, anonymise=False, incremental=False, duplicates=True, outliers=True, viewer=True, flagged_voxels=False)</h3><div class="doc">Analyse a group of lesions; return a result dict and (optionally) write
 group CSVs, a group HTML report (``plots=True``) and -- with
 ``subject_reports=True`` -- one full report per subject, linked from the
 group report.
@@ -71,7 +73,10 @@ Cohort options:
                   ``&quot;auto&quot;`` finds one by name, ``None`` turns it off.
 ``duplicates``    flag identical / near-identical masks.
 ``outliers``      flag subjects far from the group (10+ subjects).
-``n_jobs``        worker processes (``-1``: one per CPU). On Windows,
+``flagged_voxels`` (opt-in) a &quot;Show flagged voxels&quot; switch in each
+                  subject report&#x27;s slice viewer.
+``n_jobs``        worker processes (``-1``: one per CPU; ``&quot;auto&quot;``: one process for
+                  a few files, else one per CPU less one, at most 8). On Windows,
                   call from under ``if __name__ == &quot;__main__&quot;:``.
 ``incremental``   reuse cached per-subject results from a previous run
                   into the same ``out_dir`` when the file and settings
@@ -226,7 +231,22 @@ some fetch data). Also preloads the tract proxy index, the QC brain mask
 and outside-the-brain depth map, the tissue distance maps, the
 border-zone map, the key-structure distance maps,
 and, if one has been built locally, the per-tract disconnection index --
-a no-op, not an error, when it hasn&#x27;t.</div></div><h2 id="lqtpy.qc">lqtpy.qc</h2><p class="muted" style="white-space:pre-wrap">Quality control for drawn lesion masks.</p><div class="fn" id="lqtpy.qc.check"><h3>check(lesion, *, threshold: &#x27;float&#x27; = 0.5, expected_side: &quot;&#x27;str | None&#x27;&quot; = None, mni: &#x27;bool&#x27; = True, context=None, tier: &#x27;str&#x27; = &#x27;full&#x27;, **options) -&gt; &quot;&#x27;list[Finding]&#x27;&quot;</h3><div class="doc">Run every QC check; returns graded findings, worst first.
+a no-op, not an error, when it hasn&#x27;t.</div></div><div class="fn" id="lqtpy.summary"><h3>summary(lesion_or_result, *, top: &#x27;int&#x27; = 10, **analysis_options) -&gt; &#x27;dict&#x27;</h3><div class="doc">The summary of a lesion (anything :func:`lqtpy.prepare` takes; the
+analysis runs in memory, writing nothing) or of an existing
+:func:`lqtpy.analyze_single` result. ``analysis_options`` go to
+``analyze_single`` (atlases, threshold, profile, ...).</div></div><div class="fn" id="lqtpy.compare"><h3>compare(a, b, *, threshold: &#x27;float&#x27; = 0.5, atlas: &#x27;str&#x27; = &#x27;dk&#x27;, min_change_pct: &#x27;float&#x27; = 5.0, top: &#x27;int&#x27; = 10) -&gt; &#x27;dict&#x27;</h3><div class="doc">What changed from ``a`` to ``b`` (anything :func:`lqtpy.prepare` takes).
+
+Returns ``{&quot;compare_version&quot;, &quot;a&quot;, &quot;b&quot;, &quot;grid&quot;, &quot;volume&quot;, &quot;overlap&quot;,
+&quot;centroid_shift_mm&quot;, &quot;regions&quot;}``:
+
+- ``volume``: ``{a_mm3, b_mm3, change_mm3, change_pct}``
+- ``overlap``: ``{dice, jaccard, shared_mm3, only_a_mm3, only_b_mm3}``
+- ``regions``: on ``atlas``: ``gained`` (damaged only in b), ``lost``
+  (only in a), ``changed`` (both, percent damaged moved by at least
+  ``min_change_pct`` points), each ``[{name, a_pct, b_pct}]`` sorted by
+  the size of the change, at most ``top``.</div></div><div class="fn" id="lqtpy.capabilities"><h3>capabilities() -&gt; &#x27;dict&#x27;</h3><div class="doc">``{&quot;lqtpy_version&quot;, &quot;qc_version&quot;, &quot;summary_version&quot;,
+&quot;capabilities_version&quot;, &quot;features&quot;: {name: bool}, &quot;actions&quot;: [...],
+&quot;transform_formats&quot;: [...], &quot;data&quot;: {...}}``.</div></div><h2 id="lqtpy.qc">lqtpy.qc</h2><p class="muted" style="white-space:pre-wrap">Quality control for drawn lesion masks.</p><div class="fn" id="lqtpy.qc.check"><h3>check(lesion, *, threshold: &#x27;float&#x27; = 0.5, expected_side: &quot;&#x27;str | None&#x27;&quot; = None, mni: &#x27;bool&#x27; = True, context=None, tier: &#x27;str&#x27; = &#x27;full&#x27;, **options) -&gt; &quot;&#x27;list[Finding]&#x27;&quot;</h3><div class="doc">Run every QC check; returns graded findings, worst first.
 
 ``lesion``: anything :func:`lqtpy.prepare` accepts. ``expected_side``:
 &quot;left&quot;/&quot;right&quot; if the caller knows the clinical side. ``mni=False``
@@ -234,7 +254,14 @@ skips the brain-mask checks (for masks not meant to be in MNI space).
 ``context``: a :class:`~lqtpy.qc_model.DrawingContext` (or its dict/JSON
 form) from a drawing tool. ``tier``: ``&quot;fast&quot;`` or ``&quot;full&quot;``.
 ``options`` override :data:`DEFAULTS`. :func:`assess` returns the same
-findings plus the mask&#x27;s verdict and score.</div></div><div class="fn" id="lqtpy.qc.clusters"><h3>clusters(lesion, *, merge_gaps: &#x27;bool&#x27; = True) -&gt; &#x27;dict&#x27;</h3><div class="doc">Lesion clusters: connected components, with gap-drawn slabs merged.
+findings plus the mask&#x27;s verdict and score.</div></div><div class="fn" id="lqtpy.qc.assess"><h3>assess(lesion, *, threshold: &#x27;float&#x27; = 0.5, expected_side: &quot;&#x27;str | None&#x27;&quot; = None, mni: &#x27;bool&#x27; = True, context=None, tier: &#x27;str&#x27; = &#x27;full&#x27;, **options) -&gt; &#x27;QCResult&#x27;</h3><div class="doc">Graded QC for one mask: findings (worst first) with category, grade,
+extent, locations and fix hints, plus the verdict and a 0-100 score.
+See :mod:`lqtpy.qc_model` and ``docs/QC.md``.
+
+``tier=&quot;header&quot;`` reads only the file header (see
+:func:`lqtpy.qc_grade.assess_header`); ``&quot;fast&quot;`` skips the slower
+plausibility checks and estimates gap extent without interpolating;
+``&quot;full&quot;`` (default) runs everything.</div></div><div class="fn" id="lqtpy.qc.clusters"><h3>clusters(lesion, *, merge_gaps: &#x27;bool&#x27; = True) -&gt; &#x27;dict&#x27;</h3><div class="doc">Lesion clusters: connected components, with gap-drawn slabs merged.
 
 Returns ``{&quot;labels&quot;, &quot;offset&quot;, &quot;sizes&quot;, &quot;merged_from&quot;, &quot;gap_plane&quot;}``:
 ``labels`` is an int32 array over the lesion&#x27;s padded bounding box
@@ -279,7 +306,56 @@ file that already exists in ``dst`` is skipped. With ``only_flagged``
 
 Returns one record per file: ``file``, ``out`` (written path or None),
 ``status`` (written / nothing to remove / exists / failed) and the
-clean report.</div></div><h2 id="lqtpy.tissue">lqtpy.tissue</h2><p class="muted" style="white-space:pre-wrap">Tissue composition and location classes (cortical, periventricular, ...).</p><div class="fn" id="lqtpy.tissue.composition"><h3>composition(lesion, threshold: &#x27;float&#x27; = 0.5) -&gt; &#x27;dict&#x27;</h3><div class="doc">Percent of the lesion in each tissue class (they sum to 100):
+clean report.</div></div><div class="fn" id="lqtpy.qc.fix"><h3>fix(lesion, ids=None, *, threshold: &#x27;float&#x27; = 0.5, context=None, **options)</h3><div class="doc">Repair what lqtpy can repair safely: strokes, specks, edge fragments,
+voxels beyond the brain edge (removed), gaps between drawn slices, partly
+drawn slices, enclosed holes and unfilled outlines (filled).
+
+``ids``: finding ids to fix (default: every fixable finding the mask
+has). Returns ``(new_image, report)``; the input is never changed.
+``report``: ``applied`` / ``skipped`` (with reasons), ``voxels_added``,
+``voxels_removed``, and boolean masks ``added`` and ``removed`` on the
+mask&#x27;s own grid (for previews and undo).</div></div><div class="fn" id="lqtpy.qc.fix_plan"><h3>fix_plan(lesion, *, threshold: &#x27;float&#x27; = 0.5, context=None, ids=None, **options) -&gt; &quot;&#x27;list[dict]&#x27;&quot;</h3><div class="doc">Each fix lqtpy can make, worked out on its own, for a preview: one
+entry per fixable finding the mask has (or per id in ``ids``), in
+:data:`FIXABLE` order::
+
+    {&quot;id&quot;, &quot;label&quot;, &quot;action&quot;, &quot;advice&quot;, &quot;adds_voxels&quot;,
+     &quot;voxels_added&quot;, &quot;voxels_removed&quot;, &quot;added&quot;, &quot;removed&quot;}
+
+``added`` / ``removed`` are boolean masks on the mask&#x27;s own grid. Every
+entry starts from the original mask, so after applying one, plan again
+(fixes can overlap: filling gaps can also fill a hole). A fix that
+would change nothing is left out. Nothing is written.</div></div><div class="fn" id="lqtpy.qc.problem_mask"><h3>problem_mask(lesion, finding, *, threshold: &#x27;float&#x27; = 0.5, **options) -&gt; &#x27;np.ndarray&#x27;</h3><div class="doc">Boolean mask (the lesion&#x27;s own grid) of the voxels ``finding`` is
+about; ``finding`` is a :class:`~lqtpy.qc_model.Finding` or a finding
+id. See :data:`PROBLEM_KIND` for what the voxels mean. An id that isn&#x27;t
+present, or a finding about the whole mask (space, values,
+plausibility), gives an empty mask.</div></div><div class="fn" id="lqtpy.qc.Session"><h3>Session(shape=None, affine=None, *, mask=None, context=None, name: &#x27;str&#x27; = &#x27;drawing&#x27;, **options)</h3><div class="doc">One drawing. ``shape``/``affine``: the drawing&#x27;s grid (or pass
+``mask=`` an existing array / image instead of ``shape``). ``context``:
+a :class:`~lqtpy.qc_model.DrawingContext` or its dict; ``expected_side``
+and other :func:`~lqtpy.qc.assess` options go in ``options``.</div></div><h2 id="lqtpy.qc_tools">lqtpy.qc_tools</h2><p class="muted" style="white-space:pre-wrap">QC helpers for tools built on lqtpy (drawing apps, registries, pipelines).</p><div class="fn" id="lqtpy.qc_tools.export_problems"><h3>export_problems(lesion, out_dir, *, threshold: &#x27;float&#x27; = 0.5, context=None, **options) -&gt; &quot;&#x27;list[dict]&#x27;&quot;</h3><div class="doc">Write one overlay mask per finding into ``out_dir`` (created if
+needed), on the lesion&#x27;s own grid, to load over it in MRIcroGL or
+ITK-SNAP while fixing: ``&lt;lesion&gt;_&lt;finding id&gt;.nii.gz``, 1 where the
+finding&#x27;s voxels are (:func:`problem_mask`). Findings about the whole
+mask have no voxels and get no file. Never overwrites a file; returns
+``[{&quot;id&quot;, &quot;kind&quot;, &quot;voxels&quot;, &quot;path&quot;}]`` for the files written.</div></div><div class="fn" id="lqtpy.qc_tools.assess_folder"><h3>assess_folder(folder, *, tier: &#x27;str&#x27; = &#x27;full&#x27;, recursive: &#x27;bool&#x27; = False, jobs: &#x27;int&#x27; = 1, **kw) -&gt; &#x27;dict&#x27;</h3><div class="doc">QC every lesion file in ``folder``. Returns ``{&quot;results&quot;: [{&quot;file&quot;,
+&quot;name&quot;, &quot;result&quot; (QCResult.to_dict()) or &quot;error&quot;}], &quot;summary&quot;: {&quot;n&quot;,
+&quot;errors&quot;, &quot;verdicts&quot;, &quot;by_finding&quot;: {&quot;id:grade&quot;: count}, &quot;qc_version&quot;}}``.
+``jobs &gt; 1``, ``-1`` or ``&quot;auto&quot;`` uses worker processes.</div></div><div class="fn" id="lqtpy.qc_tools.rank"><h3>rank(copies, *, tier: &#x27;str&#x27; = &#x27;full&#x27;, **kw) -&gt; &quot;&#x27;list[dict]&#x27;&quot;</h3><div class="doc">Order copies of one lesion, best first: verdict, then score, then
+finer voxels. ``copies``: paths or images. Returns ``[{&quot;index&quot;,
+&quot;source&quot;, &quot;verdict&quot;, &quot;score&quot;, &quot;voxel_mm&quot;, &quot;findings&quot;}]``; ``index`` is
+the position in ``copies``.</div></div><h2 id="lqtpy.qc_advice">lqtpy.qc_advice</h2><p class="muted" style="white-space:pre-wrap">Advice for clinicians, and an action name for a drawing tool&#x27;s button.</p><div class="fn" id="lqtpy.qc_advice.advice_for"><h3>advice_for(finding) -&gt; &#x27;dict&#x27;</h3><div class="doc">``{&quot;action&quot;, &quot;text&quot;, &quot;fix_id&quot;, &quot;adds_voxels&quot;}`` for a Finding (or its
+dict or id). Unknown ids get ``review`` and the finding&#x27;s own message.</div></div><h2 id="lqtpy.labels">lqtpy.labels</h2><p class="muted" style="white-space:pre-wrap">Multi-label masks: one result per label value (``--per-label``, opt-in).</p><div class="fn" id="lqtpy.labels.label_values"><h3>label_values(lesion) -&gt; &quot;&#x27;list[int]&#x27;&quot;</h3><div class="doc">The non-zero label values of an integer-valued mask, ascending.</div></div><div class="fn" id="lqtpy.labels.split_labels"><h3>split_labels(lesion) -&gt; &quot;&#x27;dict[int, object]&#x27;&quot;</h3><div class="doc">``{label value: binary NIfTI image}`` on the mask&#x27;s own grid.</div></div><div class="fn" id="lqtpy.labels.analyze_labels"><h3>analyze_labels(lesion, out_dir=None, *, name: &quot;&#x27;str | None&#x27;&quot; = None, max_labels: &#x27;int&#x27; = 20, **kw) -&gt; &#x27;dict&#x27;</h3><div class="doc">:func:`lqtpy.analyze_single` for each label value of ``lesion``.
+``kw`` goes to ``analyze_single`` (threshold is ignored: each label is
+already binary). A mask with more than ``max_labels`` label values is
+refused (raise it to allow more). Returns ``{&quot;labels&quot;: {value: result},
+&quot;index_path&quot;}``.</div></div><h2 id="lqtpy.bids">lqtpy.bids</h2><p class="muted" style="white-space:pre-wrap">BIDS in, BIDS derivatives out (``lqtpy group DATASET --bids``, opt-in).</p><div class="fn" id="lqtpy.bids.find_masks"><h3>find_masks(root: &#x27;str&#x27;, *, exclude: &quot;&#x27;str | None&#x27;&quot; = None) -&gt; &quot;&#x27;list[tuple[str, str, dict]]&#x27;&quot;</h3><div class="doc">``[(name, path, entities)]`` for the lesion masks in the dataset.
+``name`` is ``sub-X`` (plus ``_ses-Y`` and further entities only where
+needed to tell one subject&#x27;s masks apart).</div></div><div class="fn" id="lqtpy.bids.participants"><h3>participants(root: &#x27;str&#x27;, masks) -&gt; &quot;&#x27;dict[str, dict]&#x27;&quot;</h3><div class="doc">Metadata for :func:`lqtpy.analyze_group`: ``participants.tsv`` rows,
+keyed by mask name (every mask of a participant gets that row).</div></div><div class="fn" id="lqtpy.bids.write_derivatives"><h3>write_derivatives(root: &#x27;str&#x27;, out_dir: &#x27;str&#x27;, masks, result: &#x27;dict&#x27;) -&gt; &quot;&#x27;list[str]&#x27;&quot;</h3><div class="doc">Lay the finished group run out as a BIDS derivative dataset; returns
+the BIDS files written.</div></div><h2 id="lqtpy.ants">lqtpy.ants</h2><p class="muted" style="white-space:pre-wrap">ANTs / ANTsPy transforms as input to :func:`lqtpy.native.warp_to_mni`.</p><div class="fn" id="lqtpy.ants.load_ants"><h3>load_ants(transforms) -&gt; &#x27;list&#x27;</h3><div class="doc">Read a list of ANTs transform files (ANTs order) into steps.</div></div><div class="fn" id="lqtpy.ants.map_points"><h3>map_points(steps, points_ras: &#x27;np.ndarray&#x27;) -&gt; &#x27;np.ndarray&#x27;</h3><div class="doc">MNI points (3, N; RAS mm) -&gt; native points (3, N; RAS mm).</div></div><h2 id="lqtpy.xlsx">lqtpy.xlsx</h2><p class="muted" style="white-space:pre-wrap">Excel workbook of a run&#x27;s tables (``--xlsx``, :func:`write_workbook`).</p><div class="fn" id="lqtpy.xlsx.write_workbook"><h3>write_workbook(folder: &#x27;str&#x27;, path: &quot;&#x27;str | None&#x27;&quot; = None) -&gt; &#x27;str&#x27;</h3><div class="doc">Bundle the CSV tables in ``folder`` (and its data dictionary) into one
+workbook and return its path (default ``&lt;folder&gt;/lqtpy_tables.xlsx``).</div></div><h2 id="lqtpy.notebook">lqtpy.notebook</h2><p class="muted" style="white-space:pre-wrap">Notebook cards (opt-in): a prepared lesion, a description and a QC result
+show as small cards in Jupyter instead of plain ``repr`` text.</p><div class="fn" id="lqtpy.notebook.enable"><h3>enable() -&gt; &#x27;bool&#x27;</h3><div class="doc">Show lesions, descriptions and QC results as cards in this notebook.
+Returns False (and does nothing) outside IPython.</div></div><div class="fn" id="lqtpy.notebook.disable"><h3>disable() -&gt; &#x27;None&#x27;</h3><div class="doc">Back to the plain text display.</div></div><h2 id="lqtpy.doctor">lqtpy.doctor</h2><p class="muted" style="white-space:pre-wrap">``lqtpy doctor``: check an installation and say how to fix each gap.</p><div class="fn" id="lqtpy.doctor.run_checks"><h3>run_checks() -&gt; &quot;&#x27;list[tuple[str, str, str]]&#x27;&quot;</h3><div class="doc"></div></div><h2 id="lqtpy.demo">lqtpy.demo</h2><p class="muted" style="white-space:pre-wrap">``lqtpy demo``: a report for a made-up lesion, to see what lqtpy produces.</p><div class="fn" id="lqtpy.demo.demo_lesion"><h3>demo_lesion()</h3><div class="doc">A synthetic stroke-like lesion (left insula and the white matter around
+it, about 23 cc) as a NIfTI image in MNI space.</div></div><div class="fn" id="lqtpy.demo.make_demo"><h3>make_demo(out_dir: &quot;&#x27;str | None&#x27;&quot; = None, *, open_browser: &#x27;bool&#x27; = True, verbose: &#x27;bool&#x27; = True) -&gt; &#x27;str&#x27;</h3><div class="doc">Write the demo lesion and its report; returns the report path.</div></div><h2 id="lqtpy.tissue">lqtpy.tissue</h2><p class="muted" style="white-space:pre-wrap">Tissue composition and location classes (cortical, periventricular, ...).</p><div class="fn" id="lqtpy.tissue.composition"><h3>composition(lesion, threshold: &#x27;float&#x27; = 0.5) -&gt; &#x27;dict&#x27;</h3><div class="doc">Percent of the lesion in each tissue class (they sum to 100):
 ``cortex, white_matter, deep_grey, ventricles, cerebellum, brainstem,
 csf, outside``.</div></div><div class="fn" id="lqtpy.tissue.locate"><h3>locate(lesion, *, threshold: &#x27;float&#x27; = 0.5, contact_mm: &#x27;float&#x27; = 3.0, merge_gaps: &#x27;bool&#x27; = True) -&gt; &#x27;dict&#x27;</h3><div class="doc">Tissue composition of the whole lesion and a location class for each
 separate part (gap-aware parts, the same ones the description numbers).
@@ -357,8 +433,10 @@ lesion&#x27;s centre of mass), neurological convention.</div></div><div class="f
 
 ``atlas_key``: ggseg geometry key (``dk`` or ``schaefer100``).
 ``values``: ggseg region key -&gt; value; ``labels``: key -&gt; ``(name,
-highlight_key)`` for tooltips and table linking.</div></div><div class="fn" id="lqtpy.figures.viewer_data"><h3>viewer_data(lesion, *, threshold: &#x27;float&#x27; = 0.5, step: &#x27;int&#x27; = 2) -&gt; &quot;&#x27;dict | None&#x27;&quot;</h3><div class="doc">Everything the report&#x27;s slice viewer needs: ``bg`` and ``overlay``
-sprite URIs and brainsprite ``params`` (without canvas/sprite ids).</div></div><h2 id="lqtpy.registry">lqtpy.registry</h2><p class="muted" style="white-space:pre-wrap">Plugin registry: core and extra *measures* (and extra atlases).</p><div class="fn" id="lqtpy.registry.MeasureSpec"><h3>MeasureSpec(name: &#x27;str&#x27;, label: &#x27;str&#x27;, compute: &#x27;Callable&#x27;, fields: &quot;&#x27;tuple[Field, ...]&#x27;&quot; = (), tier: &#x27;str&#x27; = &#x27;extra&#x27;, version: &#x27;str&#x27; = &#x27;1&#x27;, description: &#x27;str&#x27; = &#x27;&#x27;, interpret: &quot;&#x27;Callable | None&#x27;&quot; = None, min_voxels: &#x27;int&#x27; = 0, requires: &quot;&#x27;tuple[str, ...]&#x27;&quot; = (), source: &#x27;str&#x27; = &#x27;builtin&#x27;) -&gt; None</h3><div class="doc">MeasureSpec(name: &#x27;str&#x27;, label: &#x27;str&#x27;, compute: &#x27;Callable&#x27;, fields: &quot;&#x27;tuple[Field, ...]&#x27;&quot; = (), tier: &#x27;str&#x27; = &#x27;extra&#x27;, version: &#x27;str&#x27; = &#x27;1&#x27;, description: &#x27;str&#x27; = &#x27;&#x27;, interpret: &quot;&#x27;Callable | None&#x27;&quot; = None, min_voxels: &#x27;int&#x27; = 0, requires: &quot;&#x27;tuple[str, ...]&#x27;&quot; = (), source: &#x27;str&#x27; = &#x27;builtin&#x27;)</div></div><div class="fn" id="lqtpy.registry.Field"><h3>Field(name: &#x27;str&#x27;, unit: &#x27;str&#x27; = &#x27;&#x27;, meaning: &#x27;str&#x27; = &#x27;&#x27;) -&gt; None</h3><div class="doc">One output value of a measure.</div></div><div class="fn" id="lqtpy.registry.Descriptor"><h3>Descriptor(measure: &#x27;str&#x27;, text: &#x27;str&#x27;, level: &#x27;str&#x27; = &#x27;&#x27;, detail: &#x27;str&#x27; = &#x27;&#x27;) -&gt; None</h3><div class="doc">A word-level interpretation of one or more measure values.
+highlight_key)`` for tooltips and table linking.</div></div><div class="fn" id="lqtpy.figures.viewer_data"><h3>viewer_data(lesion, *, threshold: &#x27;float&#x27; = 0.5, step: &#x27;int&#x27; = 2, flagged=None) -&gt; &quot;&#x27;dict | None&#x27;&quot;</h3><div class="doc">Everything the report&#x27;s slice viewer needs: ``bg`` and ``overlay``
+sprite URIs and brainsprite ``params`` (without canvas/sprite ids).
+``flagged``: ``[(kind, bool mask on the lesion&#x27;s grid)]`` adds a
+``flagged`` overlay (and ``flagged_kinds``) with those voxels coloured.</div></div><h2 id="lqtpy.registry">lqtpy.registry</h2><p class="muted" style="white-space:pre-wrap">Plugin registry: core and extra *measures* (and extra atlases).</p><div class="fn" id="lqtpy.registry.MeasureSpec"><h3>MeasureSpec(name: &#x27;str&#x27;, label: &#x27;str&#x27;, compute: &#x27;Callable&#x27;, fields: &quot;&#x27;tuple[Field, ...]&#x27;&quot; = (), tier: &#x27;str&#x27; = &#x27;extra&#x27;, version: &#x27;str&#x27; = &#x27;1&#x27;, description: &#x27;str&#x27; = &#x27;&#x27;, interpret: &quot;&#x27;Callable | None&#x27;&quot; = None, min_voxels: &#x27;int&#x27; = 0, requires: &quot;&#x27;tuple[str, ...]&#x27;&quot; = (), source: &#x27;str&#x27; = &#x27;builtin&#x27;) -&gt; None</h3><div class="doc">MeasureSpec(name: &#x27;str&#x27;, label: &#x27;str&#x27;, compute: &#x27;Callable&#x27;, fields: &quot;&#x27;tuple[Field, ...]&#x27;&quot; = (), tier: &#x27;str&#x27; = &#x27;extra&#x27;, version: &#x27;str&#x27; = &#x27;1&#x27;, description: &#x27;str&#x27; = &#x27;&#x27;, interpret: &quot;&#x27;Callable | None&#x27;&quot; = None, min_voxels: &#x27;int&#x27; = 0, requires: &quot;&#x27;tuple[str, ...]&#x27;&quot; = (), source: &#x27;str&#x27; = &#x27;builtin&#x27;)</div></div><div class="fn" id="lqtpy.registry.Field"><h3>Field(name: &#x27;str&#x27;, unit: &#x27;str&#x27; = &#x27;&#x27;, meaning: &#x27;str&#x27; = &#x27;&#x27;) -&gt; None</h3><div class="doc">One output value of a measure.</div></div><div class="fn" id="lqtpy.registry.Descriptor"><h3>Descriptor(measure: &#x27;str&#x27;, text: &#x27;str&#x27;, level: &#x27;str&#x27; = &#x27;&#x27;, detail: &#x27;str&#x27; = &#x27;&#x27;) -&gt; None</h3><div class="doc">A word-level interpretation of one or more measure values.
 
 ``text`` is the phrase a report shows (&quot;compact, roughly round&quot;);
 ``measure`` names the source measure; ``level`` is a short machine key

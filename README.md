@@ -26,8 +26,12 @@ pip install ".[all]"       # + pandas frames, merged PDF bundles
 ```
 
 Atlases ship inside the package, so everything except tract disconnection and the optional
-cerebellar atlas works offline. Template maps (distance maps, border zones) are built once
-per installation and cached (`lqtpy cache` shows where).
+cerebellar atlas works offline. Atlas volumes and template maps (distance maps, border zones,
+tract indices) are prepared once per installation and cached uncompressed, about 250 MB
+(`lqtpy cache` shows where and how much, `lqtpy cache --clear` removes it, and
+`lqtpy cache --prune` deletes the caches of older lqtpy versions). Later processes
+map those files instead of loading them: start-up takes a fraction of a second, and worker
+processes share one copy in memory.
 
 ## Usage
 
@@ -273,7 +277,26 @@ lqtpy watch incoming/ -o out                   # rebuild the group report as mas
 lqtpy serve                                    # upload page for colleagues without Python
 lqtpy new-plugin fractal                       # starter package for an extra measure
 lqtpy fetch suit                               # cerebellar lobule atlas
+lqtpy qc lesion.nii.gz --export-problems fixme/   # one overlay mask per finding (MRIcroGL, ITK-SNAP)
+lqtpy single lesion.nii.gz --xlsx              # also one Excel workbook of the tables (needs openpyxl)
+lqtpy doctor                                   # check the installation, say how to fix each gap
+lqtpy demo                                     # report for a made-up lesion, opened in the browser
+lqtpy install-shortcut                         # Windows: right-click > Send to > LQTpy report
+lqtpy group lesions/ -j auto                   # worker processes chosen for you (default: one)
+lqtpy group bids_dataset/ --bids               # BIDS in, derivatives/lqtpy out
+lqtpy single labels.nii.gz --per-label         # one report per label value
+lqtpy single lesion.nii.gz --flagged-voxels --qc-examples   # report extras for fixing masks
 ```
+
+`lqtpy.summary(lesion)` gives one versioned JSON summary (`schema: "lqtpy.summary"`) for
+programs that store lqtpy's results. For drawing tools: `lqtpy.capabilities()`,
+`qc.Session` (check after every stroke), `qc.fix_plan()` (fix previews), `finding.advice` /
+`finding.action`, and `lqtpy.compare(a, b)`. `--transform` also takes ANTs transforms
+(repeat it in ANTs order: `--transform 1Warp.nii.gz --transform 0GenericAffine.mat`).
+Guide for applications that bundle lqtpy: [docs/INTEGRATION.md](docs/INTEGRATION.md).
+
+In Jupyter, `lqtpy.notebook.enable()` shows prepared lesions, descriptions and QC results as
+cards (`disable()` switches back).
 
 Output is plain, aligned text (colour only for the quality word, and only in a terminal);
 `--quiet` prints just the report path. Errors print one line and exit with 2 (bad input) or

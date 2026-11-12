@@ -103,7 +103,11 @@ def _compute(p) -> dict:
     voxel_vol = voxel_volume(affine)
     header_zooms = None
     try:
-        header_zooms = np.abs(np.asarray(p.img.header.get_zooms()[:3], dtype=float))
+        # The voxel sizes of p.img's header, from an image over a zero-strided
+        # stand-in array: the same header, without a full-grid copy.
+        import nibabel as nib
+        hdr = nib.Nifti1Image(np.broadcast_to(np.uint8(0), p.shape), p._img_affine, p._header).header
+        header_zooms = np.abs(np.asarray(hdr.get_zooms()[:3], dtype=float))
     except Exception:
         pass
     mismatch = bool(header_zooms is not None

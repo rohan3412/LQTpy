@@ -293,7 +293,11 @@ def gather_streamline_ids(lesion_voxel_keys: np.ndarray, index: dict) -> np.ndar
     gather_at = starts[group_of_slot] + offset_within_group
 
     hits = indices[gather_at]
-    return np.unique(hits)
+    # np.unique(hits), without sorting the (often millions of) hits: mark
+    # each streamline once, then read the marks in order.
+    seen = np.zeros(max(int(index.get("n_streamlines", 0)), int(hits.max()) + 1), bool)
+    seen[hits] = True
+    return np.flatnonzero(seen).astype(indices.dtype)
 
 
 def save_index(path: str, index: dict, *, compress: bool = True) -> None:
@@ -316,6 +320,11 @@ def load_index(path: str) -> dict:
     result (see ``lqtpy/datasets.py``) are responsible for that, consistent
     with how ``lqtpy/atlases.py`` freezes its own cached arrays.
     """
+    return index_from_arrays(read_index_arrays(path))
+
+
+def read_index_arrays(path: str) -> dict:
+    """The arrays of an index file, checked (see :func:`load_index`)."""
     from .errors import IndexFormatError
 
     try:
@@ -330,7 +339,7 @@ def load_index(path: str) -> dict:
                     f"this lqtpy expects {FORMAT_VERSION}. Rebuild it with "
                     "tools/build_discon_index.py."
                 )
-            out = {k: npz[k] for k in npz.files}
+            return {k: npz[k] for k in npz.files}
     except IndexFormatError:
         raise
     except FileNotFoundError:
@@ -338,9 +347,14 @@ def load_index(path: str) -> dict:
     except (ValueError, OSError, KeyError) as exc:
         raise IndexFormatError(
             f"Could not read disconnection index at '{path}': {exc}") from exc
+
+
+def index_from_arrays(arrays: dict) -> dict:
+    """The index dict :func:`load_index` returns, from its file's arrays."""
+    out = dict(arrays)
     out["shape"] = tuple(int(s) for s in out["shape"])
     out["tract_codes"] = [str(c) for c in out["tract_codes"]]
     out["layout"] = str(out["layout"])
-    out["format_version"] = version
+    out["format_version"] = int(out["format_version"])
     out["n_streamlines"] = int(out["n_streamlines"])
     return out

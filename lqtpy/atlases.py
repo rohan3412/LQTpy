@@ -197,18 +197,44 @@ class Atlas:
         if self._label_array is None:
             with self._build_lock:
                 if self._label_array is None:
-                    raw = np.asanyarray(self.img.dataobj)
-                    if raw.dtype.kind == "f":
-                        raw = np.rint(raw)
-                    arr32 = raw.astype(np.int32)
-                    max_label = int(arr32.max()) if arr32.size else 0
-                    dtype = _smallest_signed_dtype(max_label)
-                    # C order, so flat indexing (lesion voxel lists) is a view,
-                    # not a copy of the whole volume.
-                    arr = np.ascontiguousarray(arr32, dtype=dtype)
-                    arr.flags.writeable = False
-                    self._label_array = arr
+                    arrays = self._arrays()
+                    self._label_array = arrays["labels"]
+                    if self._region_voxels is None and "counts" in arrays:
+                        self._region_voxels = arrays["counts"]
         return self._label_array
+
+    def _arrays(self) -> dict:
+        """``{"labels", "counts"}``, read from the disk cache when the atlas
+        comes from a file (keyed by that file), else built here."""
+        def build():
+            raw = np.asanyarray(self.img.dataobj)
+            if raw.dtype.kind == "f":
+                raw = np.rint(raw)
+            arr32 = raw.astype(np.int32)
+            max_label = int(arr32.max()) if arr32.size else 0
+            dtype = _smallest_signed_dtype(max_label)
+            # C order, so flat indexing (lesion voxel lists) is a view,
+            # not a copy of the whole volume.
+            out = {"labels": np.ascontiguousarray(arr32, dtype=dtype)}
+            try:
+                out["counts"] = np.bincount(out["labels"].ravel())
+            except ValueError:      # negative labels: region_voxels() raises, as it always did
+                pass
+            return out
+        fn = None
+        try:
+            fn = self.img.get_filename()
+        except Exception:
+            pass
+        # Whole-brain volumes only: a small atlas loads as fast as it maps.
+        if fn and os.path.isfile(fn) and int(np.prod(self.img.shape[:3])) >= 1_000_000:
+            from ._diskcache import cached_arrays, file_key
+            safe = "".join(c if c.isalnum() else "_" for c in self.key)
+            return cached_arrays(f"atlas_{safe}_{file_key(fn)}", build)
+        out = build()
+        for v in out.values():
+            v.flags.writeable = False
+        return out
 
     def region_voxels(self) -> np.ndarray:
         """Voxel count per label id (index = label id), computed once.
@@ -217,6 +243,8 @@ class Atlas:
         """
         if self._region_voxels is None:
             with self._build_lock:
+                if self._region_voxels is None:
+                    self.label_array()
                 if self._region_voxels is None:
                     counts = np.bincount(self.label_array().ravel())
                     counts.flags.writeable = False
@@ -661,6 +689,7 @@ def preload(keys: "list[str] | None" = None) -> None:
     from . import tracts as _tracts
     if _tracts.tracts_available():
         _tracts._load_tracts()
+        _tracts._lookup()
     if "dk" in keys and "aal" in keys:
         from . import qc as _qc
         _qc.brain_mask()      # QC's out-of-brain / MNI checks

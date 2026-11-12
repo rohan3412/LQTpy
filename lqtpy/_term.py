@@ -110,8 +110,13 @@ def done_single(res: dict) -> None:
 
 
 def start_group(n: int, n_jobs=1) -> None:
-    w = "" if not n_jobs or n_jobs == 1 else (
-        f", {os.cpu_count()} workers" if n_jobs < 1 else f", {n_jobs} workers")
+    if n_jobs == "auto":
+        from ._jobs import resolve_jobs
+        k = resolve_jobs(n_jobs, n)
+        w = "" if k == 1 else f", {k} workers"
+    else:
+        w = "" if not n_jobs or n_jobs == 1 else (
+            f", {os.cpu_count()} workers" if n_jobs < 1 else f", {n_jobs} workers")
     header(f"group of {n} subject{'s' if n != 1 else ''}{w}")
 
 

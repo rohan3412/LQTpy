@@ -51,6 +51,7 @@ plots = ["matplotlib", "nilearn", "pandas", "ggseg"]   # the old matplotlib figu
 ggseg = ["pandas", "matplotlib"]
 formats = ["highdicom"]          # DICOM-SEG input (NRRD and MGZ need nothing)
 pdf = ["pypdf"]                  # merged group PDF bundle
+xlsx = ["openpyxl"]              # --xlsx Excel workbook of the tables
 discon = []  # tract_disconnection() needs no extra packages at runtime, only
              # a locally-built index -- see tools/build_discon_index.py.
 all = ["pandas", "matplotlib", "nilearn", "ggseg", "pypdf"]

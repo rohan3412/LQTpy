@@ -621,9 +621,11 @@ def brainsprite_js() -> "str | None":
         return fh.read()
 
 
-def viewer_data(lesion, *, threshold: float = 0.5, step: int = 2) -> "dict | None":
+def viewer_data(lesion, *, threshold: float = 0.5, step: int = 2, flagged=None) -> "dict | None":
     """Everything the report's slice viewer needs: ``bg`` and ``overlay``
-    sprite URIs and brainsprite ``params`` (without canvas/sprite ids)."""
+    sprite URIs and brainsprite ``params`` (without canvas/sprite ids).
+    ``flagged``: ``[(kind, bool mask on the lesion's grid)]`` adds a
+    ``flagged`` overlay (and ``flagged_kinds``) with those voxels coloured."""
     lab, aff, _, _ = _template()
     les = _lesion_ras(lesion, threshold)
     key = ("bg", step)
@@ -642,9 +644,44 @@ def viewer_data(lesion, *, threshold: float = 0.5, step: int = 2) -> "dict | Non
     aff2 = aff.copy()
     aff2[:3, :3] = aff[:3, :3] * step
     c = np.round(ijk.mean(0)).astype(int) if len(ijk) else np.array(shape) // 2
+    flagged_uri, legend = None, []
+    if flagged:
+        # The same overlay with the voxels quality findings are about painted
+        # over it, for the report's "Show flagged voxels" switch.
+        ov2 = ov.copy()
+        for kind in ("inspect", "add", "remove"):          # "remove" drawn last, on top
+            masks = [m for k, m in flagged if k == kind]
+            if not masks:
+                continue
+            sel = np.zeros(lesion_shape(lesion, threshold), bool)
+            for m in masks:
+                sel |= m
+            if not sel.any():
+                continue
+            from .prepared import prepare
+            p = prepare(lesion, threshold)
+            fij = _pooled(_lesion_ras(p._derived(sel, name="flagged")), step, shape)
+            ov2[tuple(fij.T)] = _FLAG_RGBA[kind]
+            legend.append(kind)
+        if legend:
+            flagged_uri = png_uri(_sprite(ov2))
     params = {"nbSlice": {"X": shape[0], "Y": shape[1], "Z": shape[2]},
               "overlay": {"nbSlice": {"X": shape[0], "Y": shape[1], "Z": shape[2]}, "opacity": 0.8},
               "crosshair": True, "affine": aff2.tolist(), "flagCoordinates": True,
               "flagValue": False, "numSlice": {"X": int(c[0]), "Y": int(c[1]), "Z": int(c[2])},
               "radiological": False, "showLR": True, "colorCrosshair": "#7ab3ff", "smooth": True}
-    return {"bg": _SPRITES[key], "overlay": png_uri(_sprite(ov)), "params": params}
+    out = {"bg": _SPRITES[key], "overlay": png_uri(_sprite(ov)), "params": params}
+    if flagged_uri:
+        out["flagged"] = flagged_uri
+        out["flagged_kinds"] = legend
+    return out
+
+
+#: Flagged-voxel colours in the slice viewer, by :data:`lqtpy.qc_tools.PROBLEM_KIND`.
+_FLAG_RGBA = {"remove": [214, 51, 108, 255], "add": [34, 184, 207, 255], "inspect": [250, 204, 21, 255]}
+FLAG_COLOURS = {k: "#%02x%02x%02x" % tuple(v[:3]) for k, v in _FLAG_RGBA.items()}
+
+
+def lesion_shape(lesion, threshold=0.5) -> tuple:
+    from .prepared import prepare
+    return prepare(lesion, threshold).shape

@@ -72,22 +72,38 @@ def _structure_mask(name):
     return np.isin(lab, want), np.asarray(at.img.affine, float)
 
 
+def _structure_affine(name):
+    """The affine of a key structure's source grid (no mask built)."""
+    if KEY_STRUCTURES[name][0] == "tract":
+        from .tracts import _load_tracts
+        return np.asarray(_load_tracts()["ref"].affine, float)
+    from .atlases import load_atlas
+    return np.asarray(load_atlas("dk").img.affine, float)
+
+
 def _distance_map(name):
+    """``(q, affine, n)``: the distance map in quarter-millimetres, its grid,
+    and the structure's voxel count (the voxels at distance 0)."""
     d = _DIST.get(name)
     if d is None:
         with _lock:
             d = _DIST.get(name)
             if d is None:
                 from ._diskcache import cached_arrays
-                m, aff = _structure_mask(name)
-                zooms = np.linalg.norm(aff[:3, :3], axis=0)
 
                 def build():
-                    dist = ndimage.distance_transform_edt(~m, sampling=zooms)
-                    return {"q": np.minimum(np.round(dist * 4), 255).astype(np.uint8)}
+                    m, aff = _structure_mask(name)
+                    dist = ndimage.distance_transform_edt(~m, sampling=np.linalg.norm(aff[:3, :3], axis=0))
+                    return {"q": np.minimum(np.round(dist * 4), 255).astype(np.uint8),
+                            "n": np.asarray(int(m.sum()))}
                 key = "dist_" + "".join(c if c.isalnum() else "_" for c in name)
-                q = cached_arrays(key, build)["q"]
-                d = _DIST[name] = (q, aff, int(m.sum()))
+                arrays = cached_arrays(key, build)
+                q = arrays["q"]
+                # (Entries from lqtpy 0.7.0 have no count. Outside the
+                # structure the distance is at least one voxel, q > 0, so
+                # its voxels are exactly the zeros of q.)
+                n = int(arrays["n"]) if "n" in arrays else int(q.size - np.count_nonzero(q))
+                d = _DIST[name] = (q, _structure_affine(name), n)
     return d
 
 
@@ -106,16 +122,21 @@ def distances(lesion, *, threshold: float = 0.5, names=None) -> "list[dict]":
 def _distances(p, names):
     rows = []
     world = p.world_coords()
+    on_grid = {}    # the lesion's voxels on each distance-map grid (12 maps, 2 grids)
     for name in names:
         q, aff, n = _distance_map(name)
         if not n:
             continue
-        inv = np.linalg.inv(aff)
-        ijk = np.floor(world @ inv[:3, :3].T + inv[:3, 3] + 0.5).astype(np.int64)
-        ok = np.all((ijk >= 0) & (ijk < np.array(q.shape)), axis=1)
-        if not ok.any():
+        key = (q.shape, aff.tobytes())
+        if key not in on_grid:
+            inv = np.linalg.inv(aff)
+            ijk = np.floor(world @ inv[:3, :3].T + inv[:3, 3] + 0.5).astype(np.int64)
+            ok = np.all((ijk >= 0) & (ijk < np.array(q.shape)), axis=1)
+            on_grid[key] = np.ravel_multi_index(ijk[ok].T, q.shape) if ok.any() else None
+        flat = on_grid[key]
+        if flat is None:
             continue
-        dmm = float(q[tuple(ijk[ok].T)].min()) / 4.0
+        dmm = float(q.reshape(-1)[flat].min()) / 4.0
         rows.append({"Structure": name, "Hemisphere": KEY_STRUCTURES[name][2],
                      "DistanceMM": round(dmm, 1), "Reaches": dmm <= 0.0})
     rows.sort(key=lambda r: (r["DistanceMM"], r["Structure"]))
@@ -183,13 +204,12 @@ def cross_section_load(lesion, *, threshold: float = 0.5, min_overlap_pct: float
 
 
 def _cross(p, cache, min_overlap_pct):
+    from .tracts import covered
     shape, aff = cache["shape"], np.asarray(cache["ref"].affine, float)
-    flat = p.on_grid(cache["ref"]).mask.reshape(-1)
     vox_mm2 = float(np.prod(np.linalg.norm(aff[:3, :3], axis=0)[:2]))
     rows = []
-    for t in cache["tracts"]:
-        hit = flat[t["idx"]]
-        n_hit = int(np.count_nonzero(hit))
+    for t, hit in zip(cache["tracts"], covered(p.on_grid(cache["ref"]))):
+        n_hit = int(hit.size)
         if not n_hit:
             continue
         pct = 100.0 * n_hit / t["n_vox"]

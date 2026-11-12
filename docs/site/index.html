@@ -24,7 +24,7 @@ td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertic
 pip install &quot;.[report]&quot;    # + the scroll-through slice viewer (nilearn) and subcortical map (ggseg)
 pip install &quot;.[formats]&quot;   # + DICOM-SEG input (highdicom); NRRD and MGZ need nothing
 pip install &quot;.[all]&quot;       # + pandas frames, merged PDF bundles
-</code></pre><p>Atlases ship inside the package, so everything except tract disconnection and the optional</p><p>cerebellar atlas works offline. Template maps (distance maps, border zones) are built once</p><p>per installation and cached (<code>lqtpy cache</code> shows where).</p><h2>Usage</h2><pre><code>import lqtpy
+</code></pre><p>Atlases ship inside the package, so everything except tract disconnection and the optional</p><p>cerebellar atlas works offline. Atlas volumes and template maps (distance maps, border zones,</p><p>tract indices) are prepared once per installation and cached uncompressed, about 250 MB</p><p>(<code>lqtpy cache</code> shows where and how much, <code>lqtpy cache --clear</code> removes it, and</p><p><code>lqtpy cache --prune</code> deletes the caches of older lqtpy versions). Later processes</p><p>map those files instead of loading them: start-up takes a fraction of a second, and worker</p><p>processes share one copy in memory.</p><h2>Usage</h2><pre><code>import lqtpy
 
 les = lqtpy.prepare(&quot;lesion_MNI.nii.gz&quot;)   # load and binarize once, reuse everywhere
 
@@ -63,7 +63,16 @@ lqtpy watch incoming/ -o out                   # rebuild the group report as mas
 lqtpy serve                                    # upload page for colleagues without Python
 lqtpy new-plugin fractal                       # starter package for an extra measure
 lqtpy fetch suit                               # cerebellar lobule atlas
-</code></pre><p>Output is plain, aligned text (colour only for the quality word, and only in a terminal);</p><p><code>--quiet</code> prints just the report path. Errors print one line and exit with 2 (bad input) or</p><p>1 (environment).</p><p><strong>Settings file</strong>: defaults for atlases, profile, extras, output folder, threshold, workers</p><p>and more go in <code>lqtpy.toml</code> (current folder, <code>LQTPY_CONFIG</code>, or the user config folder;</p><p><code>lqtpy config</code> shows which is used). The command line wins over the file; the Python API</p><p>ignores it.</p><pre><code>[defaults]
+lqtpy qc lesion.nii.gz --export-problems fixme/   # one overlay mask per finding (MRIcroGL, ITK-SNAP)
+lqtpy single lesion.nii.gz --xlsx              # also one Excel workbook of the tables (needs openpyxl)
+lqtpy doctor                                   # check the installation, say how to fix each gap
+lqtpy demo                                     # report for a made-up lesion, opened in the browser
+lqtpy install-shortcut                         # Windows: right-click &gt; Send to &gt; LQTpy report
+lqtpy group lesions/ -j auto                   # worker processes chosen for you (default: one)
+lqtpy group bids_dataset/ --bids               # BIDS in, derivatives/lqtpy out
+lqtpy single labels.nii.gz --per-label         # one report per label value
+lqtpy single lesion.nii.gz --flagged-voxels --qc-examples   # report extras for fixing masks
+</code></pre><p><code>lqtpy.summary(lesion)</code> gives one versioned JSON summary (<code>schema: &quot;lqtpy.summary&quot;</code>) for</p><p>programs that store lqtpy&#x27;s results. For drawing tools: <code>lqtpy.capabilities()</code>,</p><p><code>qc.Session</code> (check after every stroke), <code>qc.fix_plan()</code> (fix previews), <code>finding.advice</code> /</p><p><code>finding.action</code>, and <code>lqtpy.compare(a, b)</code>. <code>--transform</code> also takes ANTs transforms</p><p>(repeat it in ANTs order: <code>--transform 1Warp.nii.gz --transform 0GenericAffine.mat</code>).</p><p>Guide for applications that bundle lqtpy: <a href="docs/INTEGRATION.md">docs/INTEGRATION.md</a>.</p><p>In Jupyter, <code>lqtpy.notebook.enable()</code> shows prepared lesions, descriptions and QC results as</p><p>cards (<code>disable()</code> switches back).</p><p>Output is plain, aligned text (colour only for the quality word, and only in a terminal);</p><p><code>--quiet</code> prints just the report path. Errors print one line and exit with 2 (bad input) or</p><p>1 (environment).</p><p><strong>Settings file</strong>: defaults for atlases, profile, extras, output folder, threshold, workers</p><p>and more go in <code>lqtpy.toml</code> (current folder, <code>LQTPY_CONFIG</code>, or the user config folder;</p><p><code>lqtpy config</code> shows which is used). The command line wins over the file; the Python API</p><p>ignores it.</p><pre><code>[defaults]
 atlases = [&quot;aal&quot;, &quot;dk&quot;, &quot;arterial&quot;]
 profile = &quot;stroke&quot;
 out_dir = &quot;D:/lesion_reports&quot;

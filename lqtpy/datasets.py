@@ -152,7 +152,15 @@ def _load_discon_index() -> dict:
         if _INDEX_CACHE is not None:
             return _INDEX_CACHE
         path = get_discon_index_path()
-        _INDEX_CACHE = _freeze(load_index(path))
+        if os.path.getsize(path) < 1 << 20:
+            _INDEX_CACHE = _freeze(load_index(path))
+            return _INDEX_CACHE
+        # A real index is kept uncompressed in the disk cache (keyed by the
+        # file), so later processes map it instead of decompressing ~50 MB.
+        from ._diskcache import cached_arrays, file_key
+        from ._discon_index import index_from_arrays, read_index_arrays
+        arrays = cached_arrays(f"discon_index_{file_key(path)}", lambda: read_index_arrays(path))
+        _INDEX_CACHE = _freeze(index_from_arrays(arrays))
         return _INDEX_CACHE
 
 

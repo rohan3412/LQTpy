@@ -135,10 +135,11 @@ def hole_voxels(sub: np.ndarray, opts) -> np.ndarray:
     finds them. Otherwise only scattered pinholes deep inside count: the
     steps between the slices of a jagged slice-by-slice drawing form larger
     rings. :func:`lqtpy.qc.fix` fills exactly these voxels."""
-    filled = ndimage.binary_fill_holes(sub)
+    from ._morph import dilate26, erode26, fill_holes
+    filled = fill_holes(sub)
     holes = filled & ~sub
-    closed = ndimage.binary_closing(np.pad(sub, 2), structure=_S26, iterations=1)[2:-2, 2:-2, 2:-2]
-    inner = ndimage.binary_erosion(closed | filled, structure=_S26, iterations=2)
+    closed = erode26(dilate26(np.pad(sub, 2)))[2:-2, 2:-2, 2:-2]     # closing, 26-connected
+    inner = erode26(closed | filled, 2)
     pores = inner & ~sub
     if pores.any():
         if 100.0 * pores.sum() / max(int(inner.sum()), 1) >= opts["porous_min_pct"]:
@@ -183,10 +184,11 @@ def detect_holes(p, opts, mni) -> "list[Finding]":
         return []
     # Graded on what filling would add: the impact on every number.
     missing = 100.0 * n_h / (n_h + int(sub.sum()))
+    from .morphometry import label_centres
     lab, n = ndimage.label(holes, structure=_S26)
     sizes = np.bincount(lab.ravel())[1:]
     order = np.argsort(-sizes)[:10]
-    cents = ndimage.center_of_mass(holes, lab, index=[int(i) + 1 for i in order])
+    cents = label_centres(lab, n)[order]       # = ndimage.center_of_mass, exact sums
     locs = [loc_point(p, np.asarray(c) + lo, n_voxels=sizes[i]) for i, c in zip(order, cents)]
     vox = _vox_mm3(p)
     what = (f"{n} enclosed hole{'s' if n != 1 else ''}" if n <= 20
@@ -352,10 +354,9 @@ def _sparse_extent(p, f, tier) -> None:
     dips = ev.get("dip_slices", [])
     added = None
     if tier == "full" and p.n_voxels:
-        from .qc import gap_slices_only, repair_gaps
+        from .qc import _gap_repair, gap_slices_only
         try:
-            _, rep = repair_gaps(p, axis=ax, slices=gap_slices_only(ev))
-            added = rep.get("voxels_added", 0)
+            added = _gap_repair(p, ax, None, gap_slices_only(ev))[0]["voxels_added"]
         except Exception:
             added = None
         if gaps and ev.get("from_context"):

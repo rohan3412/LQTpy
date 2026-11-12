@@ -16,7 +16,7 @@ Example::
     extras = "none"             # none | all | "shape,fractal"
     out_dir = "D:/lesion_reports"
     threshold = 0.5
-    jobs = 4                    # group runs: worker processes
+    jobs = 4                    # group runs: worker processes, or "auto"
     pdf = false
     anonymise = false
     viewer = true
@@ -150,6 +150,16 @@ def load_config(path: "str | None" = None) -> "tuple[dict, str | None]":
         if k not in KEYS:
             raise ValueError(f"{path}: unknown setting '{k}' (known: {', '.join(KEYS)})")
         t = KEYS[k]
+        if k == "jobs":
+            from ._jobs import parse_jobs
+            try:
+                v = parse_jobs(v)
+            except ValueError as exc:
+                raise ValueError(f"{path}: {exc}") from None
+            if not (v == "auto" or (isinstance(v, int) and not isinstance(v, bool))):
+                raise ValueError(f"{path}: 'jobs' should be a number or \"auto\", got {v!r}")
+            out[k] = v
+            continue
         if t is list and isinstance(v, str):
             v = [x.strip() for x in v.split(",") if x.strip()]
         elif t is float and isinstance(v, int):

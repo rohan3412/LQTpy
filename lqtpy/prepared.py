@@ -17,6 +17,7 @@ from the caller's point of view and safe to share between threads.
 """
 from __future__ import annotations
 
+import math
 import os
 import threading
 
@@ -80,7 +81,40 @@ def flat_indices(mask) -> np.ndarray:
 def _nonzero(mask: np.ndarray):
     """``np.nonzero`` for an N-D array, an order of magnitude faster on large
     grids (``np.flatnonzero`` plus ``np.unravel_index``; same output)."""
-    return np.unravel_index(np.flatnonzero(mask), mask.shape)
+    return np.unravel_index(_flatnonzero(mask), mask.shape)
+
+
+def _flatnonzero(mask: np.ndarray) -> np.ndarray:
+    """``np.flatnonzero`` (same output), faster for a large, sparse boolean
+    grid. Grids read from NIfTI files are in Fortran order, where numpy
+    would first copy the whole grid into C order: instead the lesion's box
+    is found scanning in memory order, and only the box is read in C order."""
+    if mask.dtype != bool or mask.size < 1 << 16 or mask.ndim < 2:
+        return np.flatnonzero(mask)
+    if mask.flags.c_contiguous:
+        return _scan(mask.reshape(-1))
+    if mask.flags.f_contiguous:
+        ijk = np.unravel_index(_scan(mask.T.reshape(-1)), mask.shape, order="F")
+        if not ijk[0].size:
+            return np.zeros(0, np.intp)
+        lo = [int(a.min()) for a in ijk]
+        box = np.ascontiguousarray(mask[tuple(slice(a, int(b.max()) + 1) for a, b in zip(lo, ijk))])
+        sub = np.unravel_index(_flatnonzero(box), box.shape)
+        return np.ravel_multi_index(tuple(s + a for s, a in zip(sub, lo)), mask.shape)
+    return np.flatnonzero(mask)
+
+
+def _scan(m: np.ndarray) -> np.ndarray:
+    """``np.flatnonzero`` of a 1-D boolean array, eight voxels at a time: a
+    lesion leaves most 8-byte words empty, and only the others are looked
+    at voxel by voxel."""
+    n8 = m.size - m.size % 8
+    words = np.flatnonzero(m[:n8].view(np.uint64))
+    rows, cols = np.nonzero(m[:n8].reshape(-1, 8)[words])
+    out = words[rows] * 8 + cols
+    if n8 < m.size:
+        out = np.concatenate([out, np.flatnonzero(m[n8:]) + n8])
+    return out
 
 
 def _grid_key(shape, affine) -> tuple:
@@ -175,9 +209,14 @@ class PreparedLesion:
         return np.column_stack(self._nonzero)
 
     def world_coords(self) -> np.ndarray:
-        """(N, 3) float array of lesion voxel centres in world mm."""
-        ijk = self.voxel_coords().astype(float)
-        return ijk @ self.affine[:3, :3].T + self.affine[:3, 3]
+        """(N, 3) float array of lesion voxel centres in world mm (cached,
+        read-only)."""
+        def build():
+            ijk = self.voxel_coords().astype(float)
+            w = ijk @ self.affine[:3, :3].T + self.affine[:3, 3]
+            w.flags.writeable = False
+            return w
+        return self.cached("world_coords", build)
 
     def cropped(self, pad: int = 1):
         """``(sub_mask, offset)``: the mask cropped to its bounding box plus
@@ -223,7 +262,16 @@ class PreparedLesion:
     def _outside_fov(self, ref_shape, ref_affine) -> int:
         """Lesion voxels whose centres map outside the reference grid, using
         the same round-to-nearest rule nearest-neighbour resampling uses."""
-        vox = np.linalg.inv(ref_affine) @ np.vstack(
+        inv = np.linalg.inv(ref_affine)
+        lo, hi = np.asarray(self.bbox[0], float), np.asarray(self.bbox[1], float) - 1
+        corners = np.array([[x, y, z, 1.0] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
+                            for z in (lo[2], hi[2])])
+        c = (corners @ (inv @ self.affine).T)[:, :3]
+        if np.all(c.min(0) >= 0) and np.all(c.max(0) <= np.asarray(ref_shape) - 1):
+            # Every voxel centre lies inside the box these corners span, at
+            # least half a voxel from where rounding would leave the grid.
+            return 0
+        vox = inv @ np.vstack(
             [self.world_coords().T, np.ones(self.n_voxels)])
         idx = np.round(vox[:3]).astype(np.int64)
         inside = np.all((idx >= 0) & (idx < np.asarray(ref_shape)[:, None]), axis=0)
@@ -287,6 +335,20 @@ def _nearest_box(mask, src_affine, bbox, ref_shape, ref_affine):
         return None, None
     ti, tj, tk = (np.arange(a, b, dtype=float) for a, b in zip(tlo, thi))
     src_shape = mask.shape
+    if not np.any(M[:3, :3] - np.diag(np.diag(M[:3, :3]))):
+        # Axis-aligned grids (the usual case): each source index depends on
+        # one reference index only, so the rule below is applied per axis and
+        # the box is read with one outer-product gather. Same arithmetic, same
+        # voxels, no 3-D coordinate arrays.
+        keep, src = [], []
+        for r, t in enumerate((ti, tj, tk)):
+            c = M[r, r] * t + M[r, 3]
+            ok = np.flatnonzero((c >= 0) & (c <= src_shape[r] - 1))
+            keep.append(ok)
+            src.append(np.floor(c[ok] + 0.5).astype(np.int64))
+        sub = np.zeros(tuple(len(t) for t in (ti, tj, tk)), dtype=bool)
+        sub[np.ix_(*keep)] = mask[np.ix_(*src)]
+        return tuple(int(v) for v in tlo), sub
     idx = []
     valid = None
     for r in range(3):
@@ -335,7 +397,12 @@ def prepare(lesion, threshold: float = 0.5, *, name: "str | None" = None) -> Pre
         n_nonfinite = int(data.size - np.count_nonzero(finite))
         if n_nonfinite:
             data = np.where(finite, data, 0)
-    mask = data > threshold
+    if data.dtype.kind in "ui" and np.isfinite(threshold):
+        # Whole numbers above the threshold are those above its floor: an
+        # integer comparison, without converting the grid to floating point.
+        mask = data > math.floor(threshold)
+    else:
+        mask = data > threshold
     value_info = {"dtype": str(data.dtype)}
     if data.dtype.kind == "b":
         was_binary = True

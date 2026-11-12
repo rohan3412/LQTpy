@@ -36,8 +36,16 @@ def checksum(p) -> str:
     if isinstance(src, (str, os.PathLike)) and os.path.isfile(os.fspath(src)):
         return file_sha256(os.fspath(src))
     import numpy as np
+    # np.packbits(p.mask), from the lesion's voxel list (sorted flat indices)
+    # instead of a pass over the whole grid.
+    flat = np.ravel_multi_index(p._nonzero, p.shape)
+    packed = np.zeros((p.mask.size + 7) // 8, np.uint8)
+    if flat.size:
+        byte = flat >> 3
+        first = np.flatnonzero(np.diff(byte, prepend=-1))
+        packed[byte[first]] = np.bitwise_or.reduceat((128 >> (flat & 7)).astype(np.uint8), first)
     h = hashlib.sha256()
-    h.update(np.packbits(p.mask).tobytes())
+    h.update(packed.tobytes())
     h.update(np.asarray(p.affine, float).tobytes())
     return "mask:" + h.hexdigest()
 
